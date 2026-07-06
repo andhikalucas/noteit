@@ -1,0 +1,6 @@
+<Project>
+  <PropertyGroup>
+    <!-- Surface known-vulnerable NuGet packages (direct and transitive) at restore time. -->
+    <NuGetAuditMode>all</NuGetAuditMode>
+  </PropertyGroup>
+</Project>
