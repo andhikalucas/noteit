@@ -49,6 +49,20 @@ Java_ai_voiceflow_voiceflow_1mobile_WhisperNative_fullTranscribe(
     params.no_context       = true;
     params.n_threads        = threads > 0 ? threads : 4;
 
+    // Scale the encoder context to the actual audio length instead of the full
+    // 30 s window (1500 units = 30 s → 50 units/s). A 4 s sentence then costs
+    // ~1/6 of the encoder work. Padded by 32 units so the tail isn't clipped.
+    {
+        int ctx = (int)((double) n / WHISPER_SAMPLE_RATE * 50.0) + 32;
+        if (ctx < 192)  ctx = 192;
+        if (ctx > 1500) ctx = 1500;
+        params.audio_ctx = ctx;
+    }
+
+    // No temperature-fallback re-decodes: a low-confidence utterance would
+    // otherwise be decoded up to 5x over. Latency matters more on-device.
+    params.temperature_inc = 0.0f;
+
     const char *lang_c = NULL;
     if (lang != NULL) {
         lang_c = (*env)->GetStringUTFChars(env, lang, NULL);

@@ -49,6 +49,15 @@ android {
             // Signing with the debug keys for now, so `flutter run --release` works.
             signingConfig = signingConfigs.getByName("debug")
         }
+        debug {
+            // Whisper in a Debug-mode native build is 5-10x slower — always
+            // compile the native engine optimized, even for debug APKs.
+            externalNativeBuild {
+                cmake {
+                    arguments += "-DCMAKE_BUILD_TYPE=RelWithDebInfo"
+                }
+            }
+        }
     }
 }
 
