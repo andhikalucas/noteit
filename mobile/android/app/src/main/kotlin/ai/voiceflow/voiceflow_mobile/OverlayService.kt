@@ -71,6 +71,9 @@ class OverlayService : Service() {
     @Volatile private var whisperBusy = false // transcribing — ignore taps
     private var bubble: FrameLayout? = null
     private var bubbleBg: GradientDrawable? = null
+    private var bubbleSize = 0
+    private var closeTarget: FrameLayout? = null
+    private var closeTargetBg: GradientDrawable? = null
     private var params: WindowManager.LayoutParams? = null
     private var pulse: ValueAnimator? = null
     private val watchdog = Runnable { if (whisperRecording) finishWhisper() else resetToIdle() }
@@ -100,6 +103,7 @@ class OverlayService : Service() {
         pulse?.cancel()
         speech.cancelAndReset()
         if (whisperRecording) capture.abort()
+        hideCloseTarget()
         bubble?.let { windowManager.removeView(it) }
         bubble = null
         super.onDestroy()
@@ -141,6 +145,7 @@ class OverlayService : Service() {
 
     private fun addBubble() {
         val size = dp(56)
+        bubbleSize = size
         val bg = GradientDrawable().apply {
             shape = GradientDrawable.OVAL
             setColor(COLOR_INK)
@@ -175,7 +180,10 @@ class OverlayService : Service() {
         bubble = layout
     }
 
-    /** Drag to move (snaps to edges, position persisted); small movement = tap. */
+    /**
+     * Drag to move (snaps to edges, position persisted); a small movement is a
+     * tap. Dragging onto the bottom-center close target dismisses the bubble.
+     */
     private inner class DragTapListener(
         private val lp: WindowManager.LayoutParams,
         private val size: Int,
@@ -184,6 +192,7 @@ class OverlayService : Service() {
         private var startY = 0
         private var downRawX = 0f
         private var downRawY = 0f
+        private var dragging = false
         private val slop = dp(8)
 
         override fun onTouch(v: View, e: MotionEvent): Boolean {
@@ -193,17 +202,33 @@ class OverlayService : Service() {
                     startY = lp.y
                     downRawX = e.rawX
                     downRawY = e.rawY
+                    dragging = false
                     return true
                 }
                 MotionEvent.ACTION_MOVE -> {
                     lp.x = startX + (e.rawX - downRawX).toInt()
                     lp.y = startY + (e.rawY - downRawY).toInt()
-                    windowManager.updateViewLayout(v, lp)
+                    if (!dragging &&
+                        (abs(e.rawX - downRawX) > slop || abs(e.rawY - downRawY) > slop)
+                    ) {
+                        dragging = true
+                        showCloseTarget()
+                    }
+                    if (dragging) {
+                        windowManager.updateViewLayout(v, lp)
+                        highlightCloseTarget(isOverClose(lp))
+                    }
                     return true
                 }
-                MotionEvent.ACTION_UP -> {
-                    val moved = abs(e.rawX - downRawX) > slop || abs(e.rawY - downRawY) > slop
-                    if (moved) {
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    if (dragging) {
+                        val overClose = isOverClose(lp)
+                        hideCloseTarget()
+                        if (overClose) {
+                            closeBubble()
+                            return true
+                        }
+                        // Snap to the nearest side edge; keep the vertical position.
                         val screenWidth = resources.displayMetrics.widthPixels
                         lp.x = if (lp.x + size / 2 < screenWidth / 2) 0 else screenWidth - size
                         windowManager.updateViewLayout(v, lp)
@@ -217,6 +242,80 @@ class OverlayService : Service() {
             }
             return false
         }
+    }
+
+    // ----- Drag-to-close target (bottom center) -----
+
+    /** Center of the close target, in TOP|START overlay coordinates. */
+    private fun closeCenter(): Pair<Int, Int> {
+        val w = resources.displayMetrics.widthPixels
+        val h = resources.displayMetrics.heightPixels
+        return Pair(w / 2, h - dp(96))
+    }
+
+    private fun isOverClose(lp: WindowManager.LayoutParams): Boolean {
+        val (cx, cy) = closeCenter()
+        val bx = lp.x + bubbleSize / 2
+        val by = lp.y + bubbleSize / 2
+        val r = dp(72)
+        val dx = bx - cx
+        val dy = by - cy
+        return dx * dx + dy * dy < r * r
+    }
+
+    private fun showCloseTarget() {
+        if (closeTarget != null) return
+        val target = dp(64)
+        val bg = GradientDrawable().apply {
+            shape = GradientDrawable.OVAL
+            setColor(0xCC000000.toInt()) // translucent black
+        }
+        closeTargetBg = bg
+        val icon = ImageView(this).apply {
+            setImageResource(R.drawable.ic_close)
+            val pad = dp(16)
+            setPadding(pad, pad, pad, pad)
+        }
+        val layout = FrameLayout(this).apply {
+            background = bg
+            elevation = dp(4).toFloat()
+            addView(icon, FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT)
+        }
+        val lp = WindowManager.LayoutParams(
+            target, target,
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
+            PixelFormat.TRANSLUCENT,
+        ).apply {
+            gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
+            y = dp(64) // margin above the bottom edge
+        }
+        windowManager.addView(layout, lp)
+        closeTarget = layout
+    }
+
+    private fun highlightCloseTarget(active: Boolean) {
+        closeTargetBg?.setColor(if (active) COLOR_CORAL else 0xCC000000.toInt())
+        val s = if (active) 1.25f else 1f
+        closeTarget?.scaleX = s
+        closeTarget?.scaleY = s
+    }
+
+    private fun hideCloseTarget() {
+        closeTarget?.let { windowManager.removeView(it) }
+        closeTarget = null
+        closeTargetBg = null
+    }
+
+    /** Dismiss the bubble and persist it off so it doesn't reappear. */
+    private fun closeBubble() {
+        // Keep the Flutter Settings toggle in sync (shared_preferences legacy store).
+        try {
+            getSharedPreferences("FlutterSharedPreferences", Context.MODE_PRIVATE)
+                .edit().putBoolean("flutter.bubble_enabled", false).apply()
+        } catch (_: Exception) { /* best effort */ }
+        stopSelf()
     }
 
     // ----- Dictation -----
