@@ -126,7 +126,8 @@ void main() {
     await tester.tap(find.byTooltip('Settings'));
     await tester.pumpAndSettle();
     expect(find.text('Indonesian'), findsOneWidget);
-    expect(find.text('SPEECH'), findsOneWidget);
+    expect(find.text('ENGINE'), findsOneWidget);
+    expect(find.text('SPEECH LANGUAGE'), findsOneWidget);
     expect(find.text('FLOATING BUBBLE'), findsOneWidget);
   });
 

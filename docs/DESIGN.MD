@@ -380,8 +380,14 @@ app-scale `pricing-card`. Used for the permission-step rows in bubble onboarding
 
 **`VfPillToggle<T>`** — pill toggle group replacing `RadioListTile`. Selected option is a
 `pillBg`/`pillFg` primary-surface pill; unselected options are canvas pills with a hairline border —
-exactly the `pricing-tab-default` / `pricing-tab-selected` pattern. Used for language selection in
-Settings (Indonesian / English / Device default).
+exactly the `pricing-tab-default` / `pricing-tab-selected` pattern. Used for the three Settings
+choices: speech engine (noteit! · on-device / Google), Whisper model size (Tiny / Base / Small),
+and language (Indonesian / English / Device default).
+
+**Whisper model download card** — a `VfHairlineCard` holding either a "ready" row (a filled
+`checkCircle` glyph + label), a download `FilledButton`, or a themed `LinearProgressIndicator`
+(track = `hairline`, indeterminate until the first byte). It's the only progress affordance in the
+app; it reuses the hairline card rather than introducing a new surface.
 
 **`VfNoteRow`** — a flat, hairline-divided note row replacing Material `ListTile`. Title is
 `titleMedium` (weight 600); the snippet is the **same size at weight 300** (weight, not gray, carries

@@ -7,10 +7,10 @@ import 'package:provider/provider.dart';
 
 import '../data/notes_provider.dart';
 import '../models/note.dart';
-import '../services/settings_service.dart';
 import '../services/speech_service.dart';
 import '../theme/vf_components.dart';
 import '../theme/vf_theme.dart';
+import 'settings_screen.dart';
 
 class NoteEditorScreen extends StatefulWidget {
   final Note? note;
@@ -68,9 +68,8 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
 
   Future<void> _toggleDictation() async {
     final speech = context.read<SpeechService>();
-    final settings = context.read<SettingsService>();
 
-    if (speech.listening) {
+    if (speech.listening || speech.transcribing) {
       await speech.stop();
       return;
     }
@@ -82,21 +81,28 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
     }
     setState(() => _micDenied = false);
 
-    final ok = await speech.init();
-    if (!ok) return; // unavailable state rendered from service flag
-
     _preSpeechText = _ctl.text;
-    await speech.listen(
-      localeId: settings.locale,
-      onResult: (text, isFinal) {
-        final sep = _preSpeechText.isEmpty || _preSpeechText.endsWith('\n')
-            ? ''
-            : ' ';
-        _ctl.text = '$_preSpeechText$sep$text';
-        _ctl.selection = TextSelection.collapsed(offset: _ctl.text.length);
-        if (isFinal) _preSpeechText = _ctl.text;
-      },
-    );
+    final error = await speech.start((text, isFinal) {
+      final sep = _preSpeechText.isEmpty || _preSpeechText.endsWith('\n')
+          ? ''
+          : ' ';
+      _ctl.text = '$_preSpeechText$sep$text';
+      _ctl.selection = TextSelection.collapsed(offset: _ctl.text.length);
+      if (isFinal) _preSpeechText = _ctl.text;
+    });
+
+    if (error != null && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(error),
+        action: error.contains('Settings')
+            ? SnackBarAction(
+                label: 'Settings',
+                onPressed: () => Navigator.of(context).push(MaterialPageRoute(
+                    builder: (_) => const SettingsScreen())),
+              )
+            : null,
+      ));
+    }
   }
 
   Future<void> _delete() async {
@@ -124,6 +130,8 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
   Widget build(BuildContext context) {
     final speech = context.watch<SpeechService>();
     final listening = speech.listening;
+    final transcribing = speech.transcribing;
+    final active = listening || transcribing;
 
     return Scaffold(
       appBar: AppBar(
@@ -147,7 +155,6 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
       body: Column(
         children: [
           if (_micDenied) const _MicDeniedCard(),
-          if (speech.unavailableOnDevice) const _SpeechUnavailableCard(),
           Expanded(
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -170,21 +177,26 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
             child: Padding(
               padding: const EdgeInsets.all(16),
               child: FilledButton.icon(
-                style: listening
+                style: active
                     ? FilledButton.styleFrom(
-                        backgroundColor: VfTokens.lime,
+                        backgroundColor:
+                            transcribing ? VfTokens.lilac : VfTokens.lime,
                         foregroundColor: VfTokens.onBlock,
                       )
                     : null,
-                onPressed:
-                    speech.unavailableOnDevice ? null : _toggleDictation,
+                // Ignore taps while transcribing (Whisper is finishing).
+                onPressed: transcribing ? null : _toggleDictation,
                 icon: Icon(
                   listening
                       ? PhosphorIconsRegular.waveform
                       : PhosphorIconsRegular.microphone,
                   size: 20,
                 ),
-                label: Text(listening ? 'Listening — tap to stop' : 'Dictate'),
+                label: Text(transcribing
+                    ? 'Transcribing…'
+                    : listening
+                        ? 'Listening — tap to stop'
+                        : 'Dictate'),
               ),
             ),
           ),
@@ -225,26 +237,3 @@ class _MicDeniedCard extends StatelessWidget {
   }
 }
 
-class _SpeechUnavailableCard extends StatelessWidget {
-  const _SpeechUnavailableCard();
-
-  @override
-  Widget build(BuildContext context) {
-    final t = context.vf;
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-      child: Container(
-        width: double.infinity,
-        padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          color: t.surfaceSoft,
-          borderRadius: BorderRadius.circular(VfRadius.lg),
-        ),
-        child: Text(
-          'Speech recognition is unavailable on this device. You can still type.',
-          style: Theme.of(context).textTheme.bodyMedium,
-        ),
-      ),
-    );
-  }
-}

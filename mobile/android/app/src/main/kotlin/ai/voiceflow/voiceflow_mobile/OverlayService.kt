@@ -24,6 +24,7 @@ import android.view.WindowManager
 import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.Toast
+import kotlin.concurrent.thread
 import kotlin.math.abs
 
 /**
@@ -39,6 +40,8 @@ class OverlayService : Service() {
         const val ACTION_STOP = "ai.voiceflow.STOP"
         const val PREFS = "vf_overlay"
         const val KEY_LOCALE = "locale"
+        const val KEY_ENGINE = "stt_engine"   // "whisper" | "google"
+        const val KEY_MODEL = "whisper_model" // "tiny" | "base" | "small"
         private const val KEY_X = "bubble_x"
         private const val KEY_Y = "bubble_y"
         private const val CHANNEL_ID = "voiceflow_bubble"
@@ -47,9 +50,13 @@ class OverlayService : Service() {
         private const val COLOR_INK = 0xFF000000.toInt()
         private const val COLOR_LIME = 0xFFD6F655.toInt()
         private const val COLOR_CORAL = 0xFFFF8577.toInt()
+        private const val COLOR_PROC = 0xFF888888.toInt() // transcribing
 
         /** Resets a stuck listening state (e.g. recognizer never calls back). */
         private const val WATCHDOG_MS = 30_000L
+
+        /** Max Whisper recording before auto-finishing (transcribes what we have). */
+        private const val WHISPER_MAX_MS = 60_000L
 
         @Volatile
         var running = false
@@ -59,11 +66,14 @@ class OverlayService : Service() {
     private val handler = Handler(Looper.getMainLooper())
     private lateinit var windowManager: WindowManager
     private lateinit var speech: SpeechEngine
+    private val capture = AudioCapture() // Whisper path
+    @Volatile private var whisperRecording = false
+    @Volatile private var whisperBusy = false // transcribing — ignore taps
     private var bubble: FrameLayout? = null
     private var bubbleBg: GradientDrawable? = null
     private var params: WindowManager.LayoutParams? = null
     private var pulse: ValueAnimator? = null
-    private val watchdog = Runnable { resetToIdle() }
+    private val watchdog = Runnable { if (whisperRecording) finishWhisper() else resetToIdle() }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -89,6 +99,7 @@ class OverlayService : Service() {
         handler.removeCallbacks(watchdog)
         pulse?.cancel()
         speech.cancelAndReset()
+        if (whisperRecording) capture.abort()
         bubble?.let { windowManager.removeView(it) }
         bubble = null
         super.onDestroy()
@@ -210,13 +221,21 @@ class OverlayService : Service() {
 
     // ----- Dictation -----
 
+    private fun prefs() = getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+
     private fun onBubbleTapped() {
+        if (prefs().getString(KEY_ENGINE, "whisper") == "whisper") onTapWhisper()
+        else onTapGoogle()
+    }
+
+    // ----- Google (SpeechRecognizer, streaming) -----
+
+    private fun onTapGoogle() {
         if (speech.listening) {
             speech.stop() // finish utterance, results still delivered
             return
         }
-        val locale = getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            .getString(KEY_LOCALE, "id-ID").orEmpty()
+        val locale = prefs().getString(KEY_LOCALE, "id-ID").orEmpty()
         speech.start(locale, object : SpeechEngine.Listener {
             override fun onFinal(text: String) = deliver(text)
 
@@ -236,6 +255,68 @@ class OverlayService : Service() {
                 }
             }
         })
+    }
+
+    // ----- Whisper (on-device, record-then-transcribe) -----
+
+    private fun onTapWhisper() {
+        if (whisperBusy) return
+        if (whisperRecording) {
+            finishWhisper()
+            return
+        }
+        if (!WhisperNative.available) {
+            flash(COLOR_CORAL); toast("Speech engine unavailable"); return
+        }
+        val size = prefs().getString(KEY_MODEL, "small").orEmpty()
+        if (!ModelStore.isDownloaded(this, size)) {
+            flash(COLOR_CORAL); toast("Download the model in noteit! settings"); return
+        }
+        try {
+            capture.start()
+        } catch (e: Exception) {
+            flash(COLOR_CORAL); toast("Microphone unavailable"); return
+        }
+        whisperRecording = true
+        setBubbleColor(COLOR_LIME)
+        startPulse()
+        handler.postDelayed(watchdog, WHISPER_MAX_MS)
+    }
+
+    private fun finishWhisper() {
+        handler.removeCallbacks(watchdog)
+        whisperRecording = false
+        whisperBusy = true
+        pulse?.cancel(); pulse = null
+        bubble?.scaleX = 1f; bubble?.scaleY = 1f
+        setBubbleColor(COLOR_PROC) // "working" while transcribing
+
+        val size = prefs().getString(KEY_MODEL, "small").orEmpty()
+        val lang = whisperLang(prefs().getString(KEY_LOCALE, "id-ID").orEmpty())
+        val samples = capture.stop()
+        thread {
+            val text = try {
+                WhisperEngine.transcribe(this, size, samples, lang, null)
+            } catch (e: Exception) {
+                null
+            }
+            handler.post {
+                whisperBusy = false
+                setBubbleColor(COLOR_INK)
+                if (text.isNullOrBlank()) {
+                    flash(COLOR_CORAL); toast("Didn't catch that")
+                } else {
+                    deliver(text)
+                }
+            }
+        }
+    }
+
+    /** Whisper wants a language, not a region: "id-ID" → "id", "" → auto. */
+    private fun whisperLang(locale: String): String? {
+        val l = locale.trim()
+        if (l.isEmpty()) return null
+        return l.substringBefore('-').lowercase()
     }
 
     private fun deliver(text: String) {
@@ -258,6 +339,10 @@ class OverlayService : Service() {
         bubble?.scaleX = 1f
         bubble?.scaleY = 1f
         if (speech.listening) speech.cancelAndReset()
+        if (whisperRecording) {
+            whisperRecording = false
+            capture.abort()
+        }
         setBubbleColor(COLOR_INK)
     }
 

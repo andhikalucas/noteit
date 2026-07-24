@@ -2,6 +2,12 @@
 
 Date: 2026-07-24 · Status: approved
 
+> **Update (2026-07-24, later):** the app was rebranded to **noteit!** (user-visible name only;
+> code identifiers, package `ai.voiceflow.voiceflow_mobile`, and the DB stay VoiceFlow), and the
+> STT engine became **user-selectable** — on-device Whisper (default) or Google — governing both
+> in-app notes and the bubble. See "Engine selection (added)" below; it supersedes the single
+> `SpeechRecognizer` row in the original decisions table.
+
 ## Goal
 
 A minimal Flutter Android app with two jobs:
@@ -106,5 +112,63 @@ Two independent halves:
 
 ## Out of scope (v1)
 
-iOS, Whisper/on-device models, cloud STT, dictation history from bubble into app,
-folders/tags/sync, pinning, share/export, AI cleanup of transcripts.
+iOS, cloud STT, dictation history from bubble into app, folders/tags/sync, pinning,
+share/export, AI cleanup of transcripts.
+
+---
+
+## Engine selection (added 2026-07-24)
+
+The STT engine is now user-selectable and governs **both** in-app notes and the bubble.
+
+| Decision | Choice | Why |
+|---|---|---|
+| Engines | On-device **Whisper** (default) + **Google** SpeechRecognizer | User wanted our engine available; Google kept as the accurate-Indonesian / live-preview alternative |
+| Default model | Whisper **Small** (466 MB); Tiny/Base selectable | Small is the smallest size where Indonesian is decent |
+| Whisper runtime | **One** native whisper.cpp lib, shared | Bubble is pure Kotlin; a Flutter plugin can't reach it — so build once natively, expose to both |
+| Whisper UX | Record-then-transcribe (no live partials) | whisper.cpp processes complete audio; matches desktop push-to-talk |
+
+### Native architecture
+
+whisper.cpp is built into the app at compile time via CMake `FetchContent` (pinned commit
+`080bbbe…`) — no vendored source tree in the repo. It produces `libnoteit_whisper.so` +
+`libwhisper.so` + `libggml*.so` for arm64-v8a, armeabi-v7a, x86_64.
+
+```
+android/app/src/main/cpp/
+├── CMakeLists.txt      # FetchContent whisper.cpp, link libnoteit_whisper
+└── whisper_jni.c       # JNI: initContext / freeContext / fullTranscribe(samples, lang, prompt)
+
+android/.../voiceflow_mobile/
+├── WhisperNative.kt    # external fun bindings + System.loadLibrary
+├── WhisperEngine.kt    # model-context lifecycle, serialized inference
+├── ModelStore.kt       # download tiny/base/small from HF, SHA-256 verified (desktop parity)
+└── AudioCapture.kt     # AudioRecord 16 kHz mono → float samples
+```
+
+- **Bubble (Kotlin)** calls `WhisperEngine` + `AudioCapture` directly when engine=whisper;
+  otherwise the existing `SpeechEngine` (Google). Tap = record (lime pulse) → tap = transcribe
+  (grey) → insert. 60 s max, then auto-finish.
+- **In-app notes (Flutter)** go through the `voiceflow/overlay` MethodChannel:
+  `whisperStartRecording` → `whisperStopAndTranscribe(lang, model)`. `SpeechService` branches:
+  Google via the `speech_to_text` plugin (streaming), Whisper via the channel (final-only).
+- **Model management** lives in Settings: engine `VfPillToggle`, model-size toggle, and a
+  download card with progress (`downloadWhisperModel` + `onWhisperProgress` callbacks). The
+  bubble reads engine/model/locale from the shared native SharedPreferences (`vf_overlay`).
+
+### Settings persisted
+
+`stt_engine` = whisper|google (default whisper); `whisper_model` = tiny|base|small (default
+small). Mirrored to native prefs on change so the Flutter-less bubble stays in sync.
+
+### Validation
+
+`flutter analyze` clean; debug APK builds with all native libs packaged for 3 ABIs. Whisper
+transcription quality + model download run only on a real device (not the emulator) — manual.
+
+## Rebrand: noteit! (added 2026-07-24)
+
+User-visible name only. Changed: Android `android:label`, task title, About text, permission
+explainers, accessibility-service label/description, bubble notification, clipboard label,
+pubspec description. **Unchanged** (identifiers): package `ai.voiceflow.voiceflow_mobile`,
+`VoiceFlowApp` class, `voiceflow.db`, the `voiceflow/overlay` channel, pubspec `name`.
