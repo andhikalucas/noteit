@@ -156,7 +156,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   settings.bubbleEnabled
                       ? 'Bubble is on. Tap it in any app to dictate straight into the focused text field.'
                       : 'Dictate into any app with a floating mic bubble.',
-                  style: text.bodyMedium,
+                  style: text.bodyMedium?.copyWith(color: VfTokens.onBlock),
                 ),
                 const SizedBox(height: 12),
                 FilledButton(

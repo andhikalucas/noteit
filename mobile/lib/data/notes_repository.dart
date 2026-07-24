@@ -2,6 +2,7 @@ import 'package:path/path.dart' as p;
 import 'package:sqflite/sqflite.dart';
 
 import '../models/note.dart';
+import '../models/note_view.dart';
 
 /// SQLite-backed note storage. A [DatabaseFactory] can be injected so unit
 /// tests run against sqflite_common_ffi without an emulator.
@@ -21,32 +22,53 @@ class NotesRepository {
     _db = await _factory.openDatabase(
       path,
       options: OpenDatabaseOptions(
-        version: 1,
+        version: 2,
         onCreate: (db, _) => db.execute('''
           CREATE TABLE notes(
             id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT NOT NULL DEFAULT '',
             body TEXT NOT NULL,
             created_at INTEGER NOT NULL,
             updated_at INTEGER NOT NULL
           )
         '''),
+        onUpgrade: (db, from, _) async {
+          // v1 → v2: notes gain an explicit title (empty falls back to the
+          // first body line at read time, so existing notes keep their look).
+          if (from < 2) {
+            await db.execute(
+                "ALTER TABLE notes ADD COLUMN title TEXT NOT NULL DEFAULT ''");
+          }
+        },
       ),
     );
     return _db!;
   }
 
-  Future<List<Note>> all({String query = ''}) async {
+  Future<List<Note>> all({
+    String query = '',
+    NoteSort sort = NoteSort.updated,
+  }) async {
     final db = await _open();
     final q = query.trim();
+    // Date sorts order in SQL; title sorts on displayTitle (which folds in the
+    // body-line fallback) in Dart below.
+    final orderBy =
+        sort == NoteSort.created ? 'created_at DESC' : 'updated_at DESC';
     final rows = q.isEmpty
-        ? await db.query('notes', orderBy: 'updated_at DESC')
+        ? await db.query('notes', orderBy: orderBy)
         : await db.query(
             'notes',
-            where: 'body LIKE ?',
-            whereArgs: ['%$q%'],
-            orderBy: 'updated_at DESC',
+            where: 'title LIKE ? OR body LIKE ?',
+            whereArgs: ['%$q%', '%$q%'],
+            orderBy: orderBy,
           );
-    return rows.map(Note.fromMap).toList();
+    final notes = rows.map(Note.fromMap).toList();
+    if (sort == NoteSort.title) {
+      notes.sort((a, b) =>
+          a.displayTitle.toLowerCase().compareTo(b.displayTitle.toLowerCase()));
+    }
+    return notes;
   }
 
   Future<Note> insert(Note note) async {

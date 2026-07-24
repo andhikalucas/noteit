@@ -23,6 +23,7 @@ class NoteEditorScreen extends StatefulWidget {
 }
 
 class _NoteEditorScreenState extends State<NoteEditorScreen> {
+  late final TextEditingController _titleCtl;
   late final TextEditingController _ctl;
   Note? _note;
   Timer? _autosave;
@@ -35,7 +36,9 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
   void initState() {
     super.initState();
     _note = widget.note;
+    _titleCtl = TextEditingController(text: _note?.title ?? '');
     _ctl = TextEditingController(text: _note?.body ?? '');
+    _titleCtl.addListener(_scheduleAutosave);
     _ctl.addListener(_scheduleAutosave);
     if (widget.startDictating) {
       WidgetsBinding.instance.addPostFrameCallback((_) => _toggleDictation());
@@ -46,6 +49,7 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
   void dispose() {
     _autosave?.cancel();
     _flushSave();
+    _titleCtl.dispose();
     _ctl.dispose();
     super.dispose();
   }
@@ -56,13 +60,15 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
   }
 
   Future<void> _flushSave() async {
+    final title = _titleCtl.text;
     final body = _ctl.text;
     final provider = context.read<NotesProvider>();
     if (_note == null) {
-      if (body.trim().isEmpty) return; // never save an empty untouched note
-      _note = await provider.create(body: body);
-    } else if (_note!.body != body) {
-      _note = await provider.save(_note!, body);
+      // Never save an empty untouched note.
+      if (title.trim().isEmpty && body.trim().isEmpty) return;
+      _note = await provider.create(title: title, body: body);
+    } else if (_note!.title != title || _note!.body != body) {
+      _note = await provider.save(_note!, title: title, body: body);
     }
   }
 
@@ -113,6 +119,7 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
       final deleted = _note!;
       _autosave?.cancel();
       _note = null; // stop autosave resurrecting it
+      _titleCtl.removeListener(_scheduleAutosave);
       _ctl.removeListener(_scheduleAutosave);
       await provider.delete(deleted);
       messenger.showSnackBar(SnackBar(
@@ -155,6 +162,24 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
       body: Column(
         children: [
           if (_micDenied) const _MicDeniedCard(),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+            child: TextField(
+              controller: _titleCtl,
+              maxLines: 1,
+              textCapitalization: TextCapitalization.sentences,
+              textInputAction: TextInputAction.next,
+              style: Theme.of(context).textTheme.headlineMedium,
+              decoration: const InputDecoration(
+                border: InputBorder.none,
+                enabledBorder: InputBorder.none,
+                focusedBorder: InputBorder.none,
+                hintText: 'Title',
+                isDense: true,
+                contentPadding: EdgeInsets.zero,
+              ),
+            ),
+          ),
           Expanded(
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -163,6 +188,7 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
                 maxLines: null,
                 expands: true,
                 textAlignVertical: TextAlignVertical.top,
+                textCapitalization: TextCapitalization.sentences,
                 style: Theme.of(context).textTheme.bodyLarge,
                 decoration: const InputDecoration(
                   border: InputBorder.none,
@@ -220,7 +246,10 @@ class _MicDeniedCard extends StatelessWidget {
           children: [
             Expanded(
               child: Text('noteit! needs the microphone to dictate.',
-                  style: Theme.of(context).textTheme.bodyMedium),
+                  style: Theme.of(context)
+                      .textTheme
+                      .bodyMedium
+                      ?.copyWith(color: VfTokens.onBlock)),
             ),
             FilledButton(
               style: FilledButton.styleFrom(

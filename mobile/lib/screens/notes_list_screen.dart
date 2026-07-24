@@ -4,7 +4,10 @@ import 'package:provider/provider.dart';
 
 import '../data/notes_provider.dart';
 import '../models/note.dart';
+import '../models/note_view.dart';
+import '../services/settings_service.dart';
 import '../theme/vf_components.dart';
+import '../theme/vf_theme.dart';
 import 'note_editor_screen.dart';
 import 'settings_screen.dart';
 
@@ -21,8 +24,11 @@ class _NotesListScreenState extends State<NotesListScreen> {
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback(
-        (_) => context.read<NotesProvider>().refresh());
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final provider = context.read<NotesProvider>();
+      provider.sort = context.read<SettingsService>().noteSort;
+      provider.refresh();
+    });
   }
 
   @override
@@ -37,9 +43,35 @@ class _NotesListScreenState extends State<NotesListScreen> {
     ));
   }
 
+  void _onMenu(String value) {
+    final settings = context.read<SettingsService>();
+    switch (value) {
+      case 'view_list':
+        settings.noteLayout = NoteLayout.list;
+      case 'view_grid':
+        settings.noteLayout = NoteLayout.grid;
+      case 'group':
+        settings.groupByDate = !settings.groupByDate;
+      case 'sort_updated':
+        settings.noteSort = NoteSort.updated;
+        context.read<NotesProvider>().setSort(NoteSort.updated);
+      case 'sort_created':
+        settings.noteSort = NoteSort.created;
+        context.read<NotesProvider>().setSort(NoteSort.created);
+      case 'sort_title':
+        settings.noteSort = NoteSort.title;
+        context.read<NotesProvider>().setSort(NoteSort.title);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final provider = context.watch<NotesProvider>();
+    final settings = context.watch<SettingsService>();
+    final sections = settings.groupByDate
+        ? groupNotes(provider.notes, provider.sort)
+        : [NoteSection('', provider.notes)];
+
     return Scaffold(
       appBar: AppBar(
         title: const VfEyebrow('Notes'),
@@ -49,6 +81,12 @@ class _NotesListScreenState extends State<NotesListScreen> {
             icon: const Icon(PhosphorIconsRegular.gearSix),
             onPressed: () => Navigator.of(context).push(
                 MaterialPageRoute(builder: (_) => const SettingsScreen())),
+          ),
+          _ViewMenu(
+            layout: settings.noteLayout,
+            sort: settings.noteSort,
+            groupByDate: settings.groupByDate,
+            onSelected: _onMenu,
           ),
         ],
       ),
@@ -78,19 +116,11 @@ class _NotesListScreenState extends State<NotesListScreen> {
           Expanded(
             child: provider.notes.isEmpty
                 ? _EmptyState(searching: provider.query.isNotEmpty)
-                : ListView.separated(
-                    itemCount: provider.notes.length,
-                    separatorBuilder: (_, _) =>
-                        const Divider(height: 1, indent: 16, endIndent: 16),
-                    itemBuilder: (context, i) {
-                      final note = provider.notes[i];
-                      return VfNoteRow(
-                        title: note.title,
-                        snippet: note.snippet,
-                        meta: relativeDate(note.updatedAt),
-                        onTap: () => _openEditor(note),
-                      );
-                    },
+                : CustomScrollView(
+                    slivers: [
+                      ..._sectionSlivers(sections, settings.noteLayout),
+                      const SliverToBoxAdapter(child: SizedBox(height: 96)),
+                    ],
                   ),
           ),
         ],
@@ -113,6 +143,62 @@ class _NotesListScreenState extends State<NotesListScreen> {
       ),
     );
   }
+
+  List<Widget> _sectionSlivers(List<NoteSection> sections, NoteLayout layout) {
+    final slivers = <Widget>[];
+    for (final section in sections) {
+      if (section.label.isNotEmpty) {
+        slivers.add(SliverToBoxAdapter(child: _SectionHeader(section.label)));
+      }
+      if (layout == NoteLayout.grid) {
+        slivers.add(SliverPadding(
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+          sliver: SliverGrid(
+            gridDelegate:
+                const SliverGridDelegateWithFixedCrossAxisCount(
+              crossAxisCount: 2,
+              mainAxisSpacing: 12,
+              crossAxisSpacing: 12,
+              childAspectRatio: 0.82,
+            ),
+            delegate: SliverChildBuilderDelegate(
+              (context, i) {
+                final note = section.notes[i];
+                return _NoteCard(
+                  note: note,
+                  onTap: () => _openEditor(note),
+                );
+              },
+              childCount: section.notes.length,
+            ),
+          ),
+        ));
+      } else {
+        slivers.add(SliverList(
+          delegate: SliverChildBuilderDelegate(
+            (context, i) {
+              final note = section.notes[i];
+              final last = i == section.notes.length - 1;
+              return Column(
+                children: [
+                  VfNoteRow(
+                    title: note.displayTitle,
+                    snippet: note.snippet,
+                    meta: relativeDate(note.updatedAt),
+                    onTap: () => _openEditor(note),
+                  ),
+                  if (!last)
+                    const Divider(height: 1, indent: 16, endIndent: 16),
+                ],
+              );
+            },
+            childCount: section.notes.length,
+          ),
+        ));
+      }
+    }
+    return slivers;
+  }
 }
 
 String relativeDate(DateTime t, {DateTime? now}) {
@@ -123,6 +209,120 @@ String relativeDate(DateTime t, {DateTime? now}) {
   if (diff.inDays < 1) return '${diff.inHours}h';
   if (diff.inDays < 7) return '${diff.inDays}d';
   return '${t.year}-${t.month.toString().padLeft(2, '0')}-${t.day.toString().padLeft(2, '0')}';
+}
+
+/// The overflow (⋮) menu: layout, sort and date-grouping preferences.
+class _ViewMenu extends StatelessWidget {
+  final NoteLayout layout;
+  final NoteSort sort;
+  final bool groupByDate;
+  final ValueChanged<String> onSelected;
+
+  const _ViewMenu({
+    required this.layout,
+    required this.sort,
+    required this.groupByDate,
+    required this.onSelected,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return PopupMenuButton<String>(
+      tooltip: 'View options',
+      icon: const Icon(PhosphorIconsRegular.dotsThreeVertical),
+      onSelected: onSelected,
+      itemBuilder: (context) => [
+        _header('VIEW'),
+        CheckedPopupMenuItem(
+          value: 'view_list',
+          checked: layout == NoteLayout.list,
+          child: const Text('List'),
+        ),
+        CheckedPopupMenuItem(
+          value: 'view_grid',
+          checked: layout == NoteLayout.grid,
+          child: const Text('Grid'),
+        ),
+        const PopupMenuDivider(),
+        _header('SORT BY'),
+        for (final s in NoteSort.values)
+          CheckedPopupMenuItem(
+            value: 'sort_${s.name}',
+            checked: sort == s,
+            child: Text(s.label),
+          ),
+        const PopupMenuDivider(),
+        CheckedPopupMenuItem(
+          value: 'group',
+          checked: groupByDate,
+          child: const Text('Group by date'),
+        ),
+      ],
+    );
+  }
+
+  PopupMenuItem<String> _header(String label) => PopupMenuItem<String>(
+        enabled: false,
+        height: 28,
+        child: VfEyebrow(label),
+      );
+}
+
+/// A mono uppercase date/letter bucket header in the grouped list.
+class _SectionHeader extends StatelessWidget {
+  final String label;
+
+  const _SectionHeader(this.label);
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+      child: VfEyebrow(label),
+    );
+  }
+}
+
+/// A note tile for the grid layout — hairline card, weight-based hierarchy.
+class _NoteCard extends StatelessWidget {
+  final Note note;
+  final VoidCallback onTap;
+
+  const _NoteCard({required this.note, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final text = Theme.of(context).textTheme;
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(VfRadius.lg),
+      child: VfHairlineCard(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(note.displayTitle,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: text.titleMedium),
+            if (note.snippet.isNotEmpty) ...[
+              const SizedBox(height: 6),
+              Expanded(
+                child: Text(note.snippet,
+                    maxLines: 5,
+                    overflow: TextOverflow.ellipsis,
+                    style: text.bodyMedium
+                        ?.copyWith(fontWeight: FontWeight.w300)),
+              ),
+            ] else
+              const Spacer(),
+            const SizedBox(height: 8),
+            VfEyebrow(relativeDate(note.updatedAt)),
+          ],
+        ),
+      ),
+    );
+  }
 }
 
 class _EmptyState extends StatelessWidget {

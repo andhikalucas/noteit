@@ -1,42 +1,58 @@
 class Note {
   final int? id;
+  final String title;
   final String body;
   final DateTime createdAt;
   final DateTime updatedAt;
 
   const Note({
     this.id,
+    this.title = '',
     required this.body,
     required this.createdAt,
     required this.updatedAt,
   });
 
-  /// First non-empty line, trimmed; empty body → "Untitled".
-  String get title {
+  /// The heading shown in lists and the editor. Uses the explicit [title] when
+  /// set; otherwise falls back to the first non-empty body line (so notes made
+  /// before titles existed still read well), and finally "Untitled".
+  String get displayTitle {
+    final t = title.trim();
+    if (t.isNotEmpty) return t;
     for (final line in body.split('\n')) {
-      final t = line.trim();
-      if (t.isNotEmpty) return t;
+      final s = line.trim();
+      if (s.isNotEmpty) return s;
     }
     return 'Untitled';
   }
 
-  /// Body minus the title line, for list snippets.
+  /// Body preview for list rows. When there's no explicit [title] the first
+  /// body line is standing in as the title, so it's dropped from the snippet.
   String get snippet {
-    final lines = body.split('\n');
-    var titleSeen = false;
+    final hasTitle = title.trim().isNotEmpty;
+    var skipTitleLine = !hasTitle;
     final rest = <String>[];
-    for (final line in lines) {
-      if (!titleSeen && line.trim().isNotEmpty) {
-        titleSeen = true;
+    for (final line in body.split('\n')) {
+      final s = line.trim();
+      if (s.isEmpty) continue;
+      if (skipTitleLine) {
+        skipTitleLine = false;
         continue;
       }
-      if (titleSeen && line.trim().isNotEmpty) rest.add(line.trim());
+      rest.add(s);
     }
     return rest.join(' ');
   }
 
-  Note copyWith({int? id, String? body, DateTime? updatedAt}) => Note(
+  Note copyWith({
+    int? id,
+    String? title,
+    String? body,
+    DateTime? updatedAt,
+  }) =>
+      Note(
         id: id ?? this.id,
+        title: title ?? this.title,
         body: body ?? this.body,
         createdAt: createdAt,
         updatedAt: updatedAt ?? this.updatedAt,
@@ -44,6 +60,7 @@ class Note {
 
   Map<String, Object?> toMap() => {
         if (id != null) 'id': id,
+        'title': title,
         'body': body,
         'created_at': createdAt.millisecondsSinceEpoch,
         'updated_at': updatedAt.millisecondsSinceEpoch,
@@ -51,6 +68,7 @@ class Note {
 
   static Note fromMap(Map<String, Object?> m) => Note(
         id: m['id'] as int,
+        title: (m['title'] as String?) ?? '',
         body: m['body'] as String,
         createdAt:
             DateTime.fromMillisecondsSinceEpoch(m['created_at'] as int),

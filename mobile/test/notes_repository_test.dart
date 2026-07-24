@@ -2,6 +2,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'package:voiceflow_mobile/data/notes_repository.dart';
 import 'package:voiceflow_mobile/models/note.dart';
+import 'package:voiceflow_mobile/models/note_view.dart';
 
 void main() {
   sqfliteFfiInit();
@@ -61,5 +62,33 @@ void main() {
     final saved = await repo.insert(fresh('hapus saya'));
     await repo.delete(saved.id!);
     expect(await repo.all(), isEmpty);
+  });
+
+  test('persists an explicit title', () async {
+    final now = DateTime.now();
+    await repo.insert(
+        Note(title: 'Judul', body: 'isi', createdAt: now, updatedAt: now));
+    expect((await repo.all()).single.title, 'Judul');
+  });
+
+  test('search also matches the title', () async {
+    final now = DateTime.now();
+    await repo.insert(
+        Note(title: 'Rapat tim', body: 'agenda', createdAt: now, updatedAt: now));
+    expect((await repo.all(query: 'rapat')).length, 1);
+  });
+
+  test('sort by title orders on displayTitle, folding in the body fallback',
+      () async {
+    final now = DateTime.now();
+    await repo.insert(
+        Note(title: 'Zebra', body: 'x', createdAt: now, updatedAt: now));
+    await repo.insert(
+        Note(body: 'apple first line', createdAt: now, updatedAt: now));
+    await repo.insert(
+        Note(title: 'Mango', body: 'x', createdAt: now, updatedAt: now));
+    final titles =
+        (await repo.all(sort: NoteSort.title)).map((n) => n.displayTitle);
+    expect(titles, ['apple first line', 'Mango', 'Zebra']);
   });
 }
