@@ -31,16 +31,16 @@ enum WhisperModelSize {
   static WhisperModelSize fromId(String? v) => WhisperModelSize.values
       .firstWhere((e) => e.name == v, orElse: () => WhisperModelSize.small);
 
-  /// Approximate on-disk size, for the download UI.
+  /// Approximate on-disk size (q5_1 quantized), for the download UI.
   int get approxMb => switch (this) {
-        WhisperModelSize.tiny => 75,
-        WhisperModelSize.base => 142,
-        WhisperModelSize.small => 466,
+        WhisperModelSize.tiny => 30,
+        WhisperModelSize.base => 56,
+        WhisperModelSize.small => 181,
       };
 
   String get label => switch (this) {
-        WhisperModelSize.tiny => 'Tiny · 75 MB',
-        WhisperModelSize.base => 'Base · 142 MB',
-        WhisperModelSize.small => 'Small · 466 MB',
+        WhisperModelSize.tiny => 'Tiny · 30 MB',
+        WhisperModelSize.base => 'Base · 56 MB',
+        WhisperModelSize.small => 'Small · 181 MB',
       };
 }
