@@ -94,6 +94,11 @@ class OverlayService : Service() {
         startAsForeground()
         if (bubble == null) addBubble()
         running = true
+        // Preload the whisper context so the first tap transcribes immediately.
+        if (prefs().getString(KEY_ENGINE, "whisper") == "whisper") {
+            val size = prefs().getString(KEY_MODEL, "small").orEmpty()
+            thread { WhisperEngine.warmUp(this, size) }
+        }
         return START_STICKY
     }
 

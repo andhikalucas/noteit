@@ -19,6 +19,16 @@ class MainActivity : FlutterActivity() {
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+
+        // Preload the whisper context so the first in-app dictation is instant.
+        run {
+            val prefs = getSharedPreferences(OverlayService.PREFS, Context.MODE_PRIVATE)
+            if (prefs.getString(OverlayService.KEY_ENGINE, "whisper") == "whisper") {
+                val size = prefs.getString(OverlayService.KEY_MODEL, "small").orEmpty()
+                thread { WhisperEngine.warmUp(this, size) }
+            }
+        }
+
         channel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "voiceflow/overlay")
         channel.setMethodCallHandler { call, result ->
             when (call.method) {
@@ -80,6 +90,7 @@ class MainActivity : FlutterActivity() {
                             ModelStore.ensure(this, size) { p ->
                                 main.post { channel.invokeMethod("onWhisperProgress", p) }
                             }
+                            WhisperEngine.warmUp(this, size) // first dictation is instant
                             main.post { result.success(true) }
                         } catch (e: Exception) {
                             main.post { result.error("download_failed", e.message, null) }
