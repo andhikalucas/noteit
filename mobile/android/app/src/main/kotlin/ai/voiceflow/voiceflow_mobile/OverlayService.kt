@@ -109,7 +109,7 @@ class OverlayService : Service() {
             PendingIntent.FLAG_IMMUTABLE
         )
         val notification: Notification = Notification.Builder(this, CHANNEL_ID)
-            .setContentTitle("VoiceFlow bubble is on")
+            .setContentTitle("noteit! bubble is on")
             .setSmallIcon(R.drawable.ic_mic)
             .setContentIntent(tapIntent)
             .setOngoing(true)
@@ -246,7 +246,7 @@ class OverlayService : Service() {
         }
         if (!inserted) {
             val cm = getSystemService(ClipboardManager::class.java)
-            cm.setPrimaryClip(ClipData.newPlainText("VoiceFlow", text))
+            cm.setPrimaryClip(ClipData.newPlainText("noteit!", text))
             toast("Copied — long-press to paste")
         }
     }

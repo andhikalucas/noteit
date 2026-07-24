@@ -78,7 +78,7 @@ class SettingsScreen extends StatelessWidget {
           const VfEyebrow('About'),
           const SizedBox(height: 12),
           Text(
-              'VoiceFlow Mobile 1.0.0\nSpeech is processed by your device\'s '
+              'noteit! 1.0.0\nSpeech is processed by your device\'s '
               'speech service. Notes never leave this device.',
               style: text.bodyMedium),
         ],

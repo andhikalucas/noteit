@@ -113,9 +113,9 @@ class _BubbleSetupScreenState extends State<BubbleSetupScreen>
             done: _accessibilityOk,
             title: 'Accessibility service',
             explanation:
-                'Lets VoiceFlow type the transcript directly into the app '
+                'Lets noteit! type the transcript directly into the app '
                 'you\'re using. Without it, text is copied to the clipboard '
-                'instead. VoiceFlow never reads your screen.',
+                'instead. noteit! never reads your screen.',
             actionLabel: 'Open settings',
             onAction: () => bridge.openAccessibilitySettings(),
           ),

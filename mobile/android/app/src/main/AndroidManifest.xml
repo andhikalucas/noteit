@@ -6,7 +6,7 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
 
     <application
-        android:label="VoiceFlow"
+        android:label="noteit!"
         android:name="${applicationName}"
         android:icon="@mipmap/launcher_icon">
         <activity
@@ -39,7 +39,7 @@
         <service
             android:name=".InsertionService"
             android:exported="false"
-            android:label="VoiceFlow text insertion"
+            android:label="noteit! text insertion"
             android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
             <intent-filter>
                 <action android:name="android.accessibilityservice.AccessibilityService"/>

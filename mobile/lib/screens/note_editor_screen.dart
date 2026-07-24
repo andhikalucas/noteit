@@ -207,7 +207,7 @@ class _MicDeniedCard extends StatelessWidget {
         child: Row(
           children: [
             Expanded(
-              child: Text('VoiceFlow needs the microphone to dictate.',
+              child: Text('noteit! needs the microphone to dictate.',
                   style: Theme.of(context).textTheme.bodyMedium),
             ),
             FilledButton(

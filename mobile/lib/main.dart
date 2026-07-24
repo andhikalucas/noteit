@@ -32,7 +32,7 @@ class VoiceFlowApp extends StatelessWidget {
         Provider(create: (_) => OverlayBridge()),
       ],
       child: MaterialApp(
-        title: 'VoiceFlow',
+        title: 'noteit!',
         theme: vfTheme(Brightness.light),
         darkTheme: vfTheme(Brightness.dark),
         themeMode: ThemeMode.system,
