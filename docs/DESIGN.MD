@@ -305,3 +305,118 @@ The defining surface of Figma's marketing. Each is a full-content-width panel wi
 - Form-field error and validation styling is not visible on `/contact/` because no error states render in the static screenshot. Inputs have hairline borders and rounded `{rounded.md}` corners; error treatment is not documented.
 - The animated marquee-strip and color-block reveal animations are not documented (per the no-interaction policy).
 
+---
+
+# Application Design (VoiceFlow Mobile)
+
+The sections above describe Figma's **marketing** system. This section documents how that
+vocabulary is carried into the **VoiceFlow Mobile** app (Flutter, `mobile/`). The app keeps the
+marketing system's DNA — monochrome core, pastel color blocks used one-at-a-time, pills for every
+button, weight-based type hierarchy, shadow-light surfaces — but adapts it to a product surface and
+adds a **dark mode** the marketing site never needed.
+
+The app does **not** use Material Design defaults. All Material components (`RadioListTile`,
+elevated cards, tonal buttons, gray secondary text) are replaced by the tokens and components below,
+implemented in `lib/theme/vf_theme.dart` (tokens + `ThemeData`) and `lib/theme/vf_components.dart`
+(shared widgets). Fonts are **bundled** (`assets/fonts/`), not fetched at runtime.
+
+## Theming architecture
+
+- **`VfTokens`** is a Flutter `ThemeExtension` holding the six mode-dependent roles: `ink`, `canvas`,
+  `surfaceSoft`, `hairline`, `pillBg`, `pillFg`. Two instances exist — `VfTokens.light` and
+  `VfTokens.dark`. Read them anywhere via `context.vf`.
+- Pastel blocks (`lime`, `lilac`, `cream`, `mint`, `coral`, `navy`) are **mode-independent static
+  constants** — identical in light and dark — and always carry black ink (`VfTokens.onBlock`). A
+  color block reads as a poster in both modes; it is never re-tinted for dark.
+- `vfTheme(Brightness)` builds the full `ThemeData` (light or dark) and wires every Material
+  component theme (`filledButtonTheme`, `inputDecorationTheme`, `popupMenuTheme`, `snackBarTheme`,
+  `dividerTheme`, …) to the tokens, so stray Material defaults never leak through.
+- `MaterialApp` ships `theme` + `darkTheme` + `themeMode: system` — the app follows the OS setting.
+
+### Semantic tokens (light / dark)
+
+| Token | Light | Dark | Role |
+|---|---|---|---|
+| `ink` | `#000000` | `#FFFFFF` | All text and icons on canvas. Hierarchy is by **weight**, never gray. |
+| `canvas` | `#FFFFFF` | `#101014` | Page background, editor surface, input fill. |
+| `surfaceSoft` | `#F5F5F5` | `#1B1B20` | Neutral tiles (e.g. speech-unavailable card). |
+| `hairline` | `#E6E6E6` | `#2E2E34` | 1px borders and dividers (Elevation level 1). |
+| `pillBg` | `#000000` | `#FFFFFF` | Primary pill surface — **inverts** so the primary CTA stays highest-contrast on its canvas. |
+| `pillFg` | `#FFFFFF` | `#000000` | Primary pill label/icon. |
+
+### Color blocks (both modes)
+
+`lime #D6F655` · `lilac #DAD0F7` · `cream #F6F0E4` · `mint #CFF5E4` · `coral #FF8577` ·
+`navy #242B66`. Ink on any block is always `#000000`. Semantic usage in-app:
+**lime = active listening**, **lilac = onboarding / explainer**, **coral = error/destructive**.
+Only one block is visible per screen region at a time (marketing's one-block-per-viewport rule).
+
+## Dark mode principles
+
+1. **Swap, don't dim.** Dark mode swaps `ink`↔`canvas` rather than layering translucency. Body
+   hierarchy still comes from Inter weight, not opacity — same rule as light.
+2. **Blocks are invariant.** Pastel blocks and their black ink are identical in both modes. This is
+   the one place "black text on a light surface" persists in dark mode, and it's intentional — the
+   block is a poster, not a themed surface.
+3. **The primary pill inverts.** `pillBg`/`pillFg` flip so "selected = primary surface" stays the
+   highest-contrast element against whichever canvas is active (mirrors `pricing-tab-selected`).
+4. **Hairlines carry structure.** With shadows still avoided, the `hairline` token does the
+   separating work in both modes; it lightens just enough on dark canvas to stay visible.
+
+## App components
+
+Each replaces a Material default. Component widgets live in `lib/theme/vf_components.dart`.
+
+**`VfEyebrow`** — mono uppercase section label (`{typography.eyebrow}`: JetBrainsMono, 12px, +0.6
+tracking). Replaces ad-hoc styled `Text`. Used for AppBar titles ("NOTES", "NOTE", "SETTINGS") and
+section headers ("SPEECH", "FLOATING BUBBLE", "ABOUT").
+
+**`VfBlockCard`** — a pastel color-block container (`{rounded.lg}` 24, 24px padding), the app-scale
+analog of `color-block-section`. Forces `onBlock` ink + icon color on its subtree. Used for the
+onboarding explainer (lilac), the bubble status card (lime/lilac), and the mic-denied card (coral).
+
+**`VfHairlineCard`** — canvas card stroked with `hairline`, no shadow (Elevation level 1). The
+app-scale `pricing-card`. Used for the permission-step rows in bubble onboarding.
+
+**`VfPillToggle<T>`** — pill toggle group replacing `RadioListTile`. Selected option is a
+`pillBg`/`pillFg` primary-surface pill; unselected options are canvas pills with a hairline border —
+exactly the `pricing-tab-default` / `pricing-tab-selected` pattern. Used for language selection in
+Settings (Indonesian / English / Device default).
+
+**`VfNoteRow`** — a flat, hairline-divided note row replacing Material `ListTile`. Title is
+`titleMedium` (weight 600); the snippet is the **same size at weight 300** (weight, not gray, carries
+the hierarchy); the trailing relative-date is a `VfEyebrow`.
+
+### Buttons & inputs (themed Material, not defaults)
+
+- **Primary pill** = `FilledButton` themed to `pillBg`/`pillFg`, `StadiumBorder`, min height 44.
+  Used for "Dictate", "Turn bubble on", "Set up bubble".
+- **Secondary pill** = `OutlinedButton` on canvas with a hairline border, `StadiumBorder`. Used for
+  "Write" and the permission-step "Open settings" / "Allow" actions.
+- **Listening state** recolors the primary pill to `lime` with `onBlock` ink (not a new component).
+- **Destructive** recolors to `coral` with `onBlock` ink ("Turn bubble off", "Grant").
+- **Inputs** = borderless in the editor; hairline-bordered `{rounded.md}` for the search field.
+  Focus is a full-ink border ring, never a fill change (mirrors `text-input-focused`).
+
+## Floating bubble (native, off-app)
+
+The Android overlay bubble (`OverlayService.kt`) is drawn in native views, not Flutter, so it holds
+its own copies of the tokens as ARGB ints: `ink #000000` idle, `lime #D6F655` while listening (with
+a scale pulse), `coral #FF8577` on error. It is a 56dp circle — `{rounded.full}` — and is the one
+place the app uses elevation (4dp), because a floating control must read as lifted off other apps.
+The bubble does not theme to dark mode: it floats over arbitrary apps, so it keeps the black idle /
+lime active identity regardless of the OS theme.
+
+## What the app deliberately drops from Material
+
+- No `RadioListTile` / `Switch` / `Checkbox` defaults → `VfPillToggle` and pill buttons.
+- No elevated/tonal cards or drop shadows on content → `VfHairlineCard` / `VfBlockCard` (flat).
+- No mid-gray secondary text (`Colors.grey`, `onSurfaceVariant`) → weight-based hierarchy on `ink`.
+- No Material purple/seed accent surfaces → monochrome core + the fixed pastel block palette only.
+- No runtime web-fetched fonts → Inter + JetBrains Mono bundled in `assets/fonts/`.
+
+## App-specific gaps
+
+- The bubble's native token copies are duplicated by hand from `VfTokens`; there is no shared source
+  of truth across the Dart/Kotlin boundary. If a block hex changes, update both.
+- High-contrast / forced-dark OEM skins are untested; the app trusts the OS `Brightness` only.
