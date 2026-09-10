@@ -2,15 +2,15 @@
 
 Date: 2026-09-10
 
-Status: Core application implementation and automated checks are complete. The first bounded A55 model comparison is complete, but final selection and device acceptance remain pending. Small Q8 is a faster recognition candidate; reliable local formatting and self-correction remain unresolved. The tested cleanup runtime stays disabled after failing quality checks. See [implementation progress](mobile-implementation-progress.md).
+Status: Preparing the private noteit! 1.0.0 build 2 release. Gemini remains primary; the existing local fallback is unchanged. Both new local candidates failed fresh mixed-language validation and are not promoted. The plan below records the original workstreams and later scope changes; the current release decision and deferred work take precedence. See [implementation status](mobile-implementation-progress.md), [release status](../mobile/docs/release-status.md), and [next-version handoff](../mobile/docs/next-version-handoff.md).
 
 ## Goal and agreed scope
 
 Improve personal voice dictation in the Android app, including both notes and the floating microphone. The target device is a Samsung Galaxy A55 with 8 GB RAM and Android 16. Speech may be entirely English or mix Indonesian and English within a sentence. Preserve the languages spoken rather than translating them.
 
-The reported local baseline is a 20-30 second wait after a 20-second recording. Target a finished local transcript within five seconds after stopping, including offline cleanup, without worsening recognition accuracy. This is an experimental target pending measurements on the A55, not a promised result.
+The reported local baseline is a 20-30 second wait after a 20-second recording. The current acceptance budget is up to 15 seconds after stopping for the finished local transcript, including recognition, formatting, and any other pending cleanup. Accuracy takes priority: the owner accepts a 10-15 second wait for better results, but considers waits above 15 seconds too long. Aim for ten seconds or less when quality permits; ten seconds is not a lower bound. The original five-second target remains a stretch goal, not the current acceptance gate.
 
-Owner clarification during evaluation: punctuation and capitalization matter more than a shorter wait. Treat five seconds as an aspiration, not permission to omit formatting or accept unsafe cleanup. “Yang tadi” was spoken in the first sample; do not make it a globally removable filler rule.
+Owner clarification during evaluation: punctuation and capitalization matter more than a shorter wait within that budget. Do not omit formatting or accept unsafe cleanup to obtain faster timings. “Yang tadi” was spoken in the first sample; do not make it a globally removable filler rule.
 
 Use Gemini 3.5 Transcribe by default and offer a separate, fully offline local engine. Remove Android's existing Google speech recognizer. Deliver finished transcripts after stopping in this version. Typical daily usage is under ten minutes; validate continuous ten-minute recordings as well.
 
@@ -100,6 +100,20 @@ Subagents have separate file ownership and consume agreed interfaces. Changes to
 - Benchmark recognition and cleanup independently, then together. Include both in the post-stop latency target.
 - If semantic cleanup cannot meet speed and quality requirements, report the measured tradeoff before replacing it with simpler rules.
 
+Evaluation checkpoint: neither the 0.6B cleanup nor the bounded 1.7B full-text/
+indexed formatting screen passed quality. Direct Whisper style prompting also
+failed: it invented words at a forced chunk boundary and changed a negation in
+repeated whole-recording A55 runs. Do not repeat those prompt loops or enable
+their controls in ordinary dictation. The bounded host label-based screen is
+complete: source-span rendering preserves raw text, but neither formatter is
+accepted for boundary quality. Medium Q8 also remains experimental because one
+clip contained unwanted translation. Review broader fixed text before Android
+formatter integration, and assess a boundary-safe strategy for longer dictation.
+Evaluate any successful candidate on the A55 against the current
+15-second finished-output budget, vocabulary interaction, and fresh recordings.
+Punctuation restoration does not implement filler removal, spoken corrections,
+or idea-aware paragraphs.
+
 #### Improvement loop
 
 1. Run a candidate on the same recordings and capture results.
@@ -130,7 +144,7 @@ This loop tunes model selection, inference settings, and application code. It do
 
 ## Acceptance criteria
 
-- At least 90% of warm 20-second local sessions finish within five seconds after stopping, including offline cleanup.
+- For 20-second local recordings, finished output is available within 15 seconds after stopping, including recognition and formatting/cleanup still pending at stop. Runs above 15 seconds exceed the owner's current budget. Aim for ten seconds or less without sacrificing accuracy; five seconds is a stretch goal only. Report median, 90th-percentile, and maximum delay, with warm and cold results separated rather than hiding loading or slow runs.
 - Raw recognition error rates do not worsen against the measured baseline in either English or mixed-language subsets. Score intentional cleanup separately.
 - Local cleanup acceptance examples preserve meaning, names, numbers, negation, and language choices.
 - No invented speech during silence, missing audio, or accidental duplicate boundary phrases in the local acceptance recordings.
@@ -141,7 +155,7 @@ This loop tunes model selection, inference settings, and application code. It do
 - Controls remain accessible with Android 16 navigation buttons, gesture navigation, and the keyboard.
 - Existing notes and core editing behavior survive migration and integration.
 
-If no local candidate passes, retain the existing engine and present the measured accuracy/speed tradeoff. Do not silently choose a less accurate model or claim the five-second target was achieved.
+If no local candidate passes, retain the existing engine and present the measured accuracy/speed tradeoff. Do not silently choose a less accurate model or count recognition-only timings as acceptance of finished, formatted output. Historical five-second experiments remain evidence, not the current gate.
 
 ## Owner involvement
 
@@ -150,6 +164,11 @@ If no local candidate passes, retain the existing engine and present the measure
 - Record the initial reference samples once; automated tests reuse them.
 - Leave the phone connected for repeated replay runs, including pauses to account for heat.
 - Perform brief final microphone, editing, and floating-bubble checks.
+
+Use the [A55 acceptance checklist](../mobile/docs/a55-acceptance-checklist.md) to
+separate automated replay checks from owner-operated microphone and cross-app
+checks. Preserve notes and verify signing compatibility before any personal-app
+update; the isolated benchmark app cannot validate configured Gemini calls.
 
 ## Deferred improvements for the next version
 
@@ -177,3 +196,28 @@ Show text while speaking and support correcting it without later recognition ove
 - [Qwen3-ASR 0.6B](https://huggingface.co/Qwen/Qwen3-ASR-0.6B)
 - [sherpa-onnx Qwen deployment](https://k2-fsa.github.io/sherpa/onnx/qwen3-asr/pretrained.html)
 - [Qwen3 0.6B text model](https://huggingface.co/Qwen/Qwen3-0.6B)
+
+## Current local scope: final readability pass (10 September 2026)
+
+The owner authorized one further bounded fix-and-test pass, with parallel agents.
+It targets explicit spoken corrections, conservative filler removal, punctuation,
+and sentence capitalization. Automatic paragraph detection moves to next version,
+alongside inline selection-to-autocorrect. Gemini formatting refinements remain
+deferred. Do not reopen a broad model or prompting search.
+
+For the owner's 40-second blocks and 5-minute notes, Local after-stop latency must
+include recognition and formatting: no longer than the recording, preferably
+half its duration. Earlier fixed 20-second/15-second budgets above are historical.
+No short warm replay establishes long-session or first-use acceptance.
+
+The implemented candidate is isolated behind explicit debug benchmark flags; no
+personal model default is promoted until its complete output is reviewed. See
+[current pass](../mobile/docs/local-readable-pass-20260910.md) for examples,
+abstention rules, verification, and the remaining owner voice check.
+
+The fresh owner voice check subsequently completed with four frozen runs.
+Both candidates failed mixed-language fidelity through unwanted translation and
+meaning changes. End this bounded pass without promoting either local model;
+retain the implemented readability work as an isolated candidate. Broader local
+recognition changes require a new scope decision. Gemini remains primary, and
+this local test makes no new claim about Gemini quality or latency.

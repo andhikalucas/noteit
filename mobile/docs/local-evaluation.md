@@ -1,10 +1,18 @@
 # Local transcription evaluation
 
-The shipping candidate remains multilingual Whisper Small Q5. The new pipeline
-uses automatic language detection and begins decoding pause-delimited audio
-while recording continues. The first bounded A55 comparison is complete, but
-model selection and device acceptance are incomplete. The five-second post-stop
-goal for a finished, formatted transcript is not an achieved result.
+The personal release retains multilingual Whisper Small Q5. It uses automatic
+language detection and begins decoding bounded audio chunks while recording
+continues. The new Small Q8 and Medium Q8 readable candidates failed fresh
+mixed-language validation and are not promoted. See the
+[final acceptance record](local-readable-pass-20260910.md).
+
+The latest target is roughly40-second blocks or five-minute notes: complete
+after-stop processing should not exceed recording duration, preferably taking
+half as long. Quality and meaning preservation are mandatory. Historical fixed
+20-second/15-second budgets below are not the current general acceptance gate.
+The score CLI retains those legacy20-second timing fields; for other durations,
+inspect complete `postStopMs / audioMs` and formatting outcome directly. Do not
+treat null legacy eligibility fields as a pass or extrapolate short warm runs.
 
 The Android runtime and incremental pipeline for offline semantic cleanup are
 implemented as an **opt-in candidate**, not enabled by default. Without that
@@ -202,15 +210,19 @@ reasons; a fast result that mostly fell back to raw text does not pass the
 semantic-cleanup acceptance gate.
 The scorer reports general latency as diagnostic data, including raw/fallback
 output. Its separate `cleanedWarm20sRuns`, `cleanedP90PostStopMs` and
-`cleanedFractionWithin5s` exclude disabled or rejected cleanup passes. Those
-metrics still require a separate review of meaning and recognition accuracy.
+`cleanedFractionWithin5s` exclude disabled or rejected cleanup passes. Five-second
+fields remain for historical comparisons, not the current acceptance gate. The
+scorer also reports `postStopBudgetMs: 15000`, `fractionWithin15s`, `runsOver15s`,
+median and maximum post-stop delays, and corresponding eligible-cleanup budget
+fields. Those metrics still require meaning and recognition accuracy review.
 
 Recognition real-time factor must remain below 1 with headroom during sustained
 use. Otherwise pending chunks accumulate and chunking will not solve post-stop
 delay. Recheck finalists over ten minutes and repeated warm runs; a short cold
-run cannot establish thermal behavior. At least 90% of warm 20-second held-out
-sessions must finish within five seconds **including eventual cleanup**, and raw
-recognition WER must not worsen in either English or mixed-language subsets.
+run cannot establish thermal behavior. Validate the current 15-second budget for
+20-second held-out sessions **including eventual cleanup**, disclose every
+over-budget run, and keep cold/warm results separate. Raw recognition WER must
+not worsen in either English or mixed-language subsets.
 Review actual meaning, numbers, names, negation, language preservation and chunk
 boundaries; WER alone cannot establish correctness.
 
@@ -381,11 +393,12 @@ fell back unchanged after its cleanup deadline. The candidate therefore still
 fails the requested formatting outcome and remains disabled. No unchanged or
 fallback output should be counted as successful punctuation restoration.
 
-The owner explicitly prefers punctuation/capitalization over a shorter wait.
-Five seconds remains a performance aspiration, not permission to ship unformatted
-text or unsafe edits. More time alone did not make this cleanup model acceptable.
+The owner now explicitly prioritizes accuracy with a 10–15-second acceptable
+processing range for a 20-second recording; over 15 seconds is too long. Faster
+is welcome when quality holds. More time alone did not make this cleanup model
+acceptable, and five seconds is only a stretch goal.
 
-The next host-only 1.7B screen and stronger structural checks are documented in
+The completed host-only 1.7B screen and stronger structural checks are documented in
 [formatting experiments](local-formatting-experiments.md). That screen separates
 formatting from deleting fillers or resolving corrections. It does not enable a
 replacement model or count unchanged text as successful cleanup.
@@ -393,9 +406,40 @@ replacement model or count unchanged text as successful cleanup.
 Host measurements cannot establish the phone cleanup budget. Use the direct
 Android matrix above for that acceptance gate. Remaining work: find a formatting
 and correction approach that preserves content, then measure combined latency
-and thermal behavior before enabling it in ordinary use. The previous 1.7B alternative
-remains an escalation if 0.6B fails quality and the measured budget permits it;
-it is not packaged or selected here.
+and thermal behavior before enabling it in ordinary use. The subsequent 1.7B
+full-text and indexed-operation screens also failed formatting quality. They are
+not selected and should not be treated as untried escalation candidates.
+
+### Direct Whisper formatting screen
+
+The completed bounded experiment compared greedy/beam-five decoding with and without
+a neutral bilingual style example. The host screen produced repeatable sentence
+punctuation and capitalization on both saved clips without a second model, but
+still misrecognized words, including a negation. These whole-file Mac results do
+not establish A55 chunked recognition or finished-transcript latency. Two
+emulator whole-file JNI checks reproduced the punctuated Mixed02 output, but
+four subsequent paced chunked checks exposed invented boundary words in the
+prompted configuration and missing tail words in both prompted/unprompted paths.
+Do not enable the style candidate with current forced chunking.
+
+Benchmark JSON accepts `beamSize` from 1 to 5 (default 1), and an optional
+`recognitionPrompt` of at most 512 characters. A missing/null prompt preserves
+vocabulary hints; an empty prompt disables hints; a nonempty prompt replaces
+them for the experiment. Production defaults are unchanged. Protocol, private
+artifacts and limitations are in [formatting experiments](local-formatting-experiments.md).
+
+### Accuracy-first host follow-up
+
+The bounded ONNX label screen and a four-run Medium Q8 recognition screen are
+complete without the phone. A new source-span renderer fixes tokenizer text
+loss and preserves existing literals and paragraphs. The larger label model is
+the better formatting comparator but still has boundary errors. Medium improves
+some names and punctuation but translates a phrase in Mixed01. Neither is an
+accepted replacement; no app defaults changed. See
+[label screen](punctuation-label-screen.md) and
+[Medium results](local-formatting-experiments.md#medium-q8-accuracy-screen-under-the-revised-budget).
+The benchmark scorer now reports the current 15-second budget, median, maximum
+and over-budget counts, retaining historical five-second fields for comparison.
 
 ## Vulkan experiment
 

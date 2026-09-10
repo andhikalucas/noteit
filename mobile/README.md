@@ -1,17 +1,36 @@
-# voiceflow_mobile
+# noteit!
 
-A new Flutter project.
+Personal Android notes and dictation app, built with Flutter. Gemini is the
+default transcription engine; the existing offline Whisper fallback remains
+available. Experimental local models and readability processing are not enabled
+in personal builds.
 
-## Getting Started
+## Build for personal use
 
-This project is a starting point for a Flutter application.
+Set the Gemini key in the ignored `android/secrets.properties` file following
+[Gemini setup](docs/gemini-setup.md), then run:
 
-A few resources to get you started if this is your first Flutter project:
+```sh
+flutter pub get
+flutter build apk --release --target-platform android-arm64
+```
 
-- [Learn Flutter](https://docs.flutter.dev/get-started/learn-flutter)
-- [Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Flutter learning resources](https://docs.flutter.dev/reference/learning-resources)
+The APK contains the configured key. Keep it private; do not commit it or attach
+it to a public release. Current signing is for personal sideloading, not a store
+release. Use the same signing key and application ID to preserve update
+compatibility. Do not uninstall or clear the personal app as an update workaround.
 
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+## Project records
+
+- [Release status and installation](docs/release-status.md)
+- [Next-version handoff and lessons learned](docs/next-version-handoff.md)
+- [Local evaluation protocol](docs/local-evaluation.md)
+- [Latest local quality decision](docs/local-readable-pass-20260910.md)
+- [A55 acceptance checklist](docs/a55-acceptance-checklist.md)
+- [Original implementation plan](../docs/mobile-implementation-plan.md)
+
+Tests: `flutter test`, `flutter analyze`, and
+`python3 -m unittest discover -s scripts -p 'test_*.py'`.
+Device integration tests must use the isolated benchmark package, never the
+personal application's notes or recordings. Optional model runtimes require
+their pinned assets; see the evaluation documents before running experiments.
