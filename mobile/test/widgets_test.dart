@@ -21,7 +21,9 @@ void main() {
 
   setUp(() {
     repo = NotesRepository(
-        factory: databaseFactoryFfi, overridePath: inMemoryDatabasePath);
+      factory: databaseFactoryFfiNoIsolate,
+      overridePath: inMemoryDatabasePath,
+    );
   });
 
   tearDown(() => repo.close());
@@ -39,8 +41,9 @@ void main() {
     expect(find.text('Write'), findsOneWidget);
   });
 
-  testWidgets('list shows notes newest-first with title and snippet',
-      (tester) async {
+  testWidgets('list shows notes newest-first with title and snippet', (
+    tester,
+  ) async {
     await repo.insert(seed('Nota lama\nisi lama', at: DateTime(2026, 1, 1)));
     await repo.insert(seed('Nota baru\nisi baru', at: DateTime(2026, 7, 1)));
     await tester.pumpWidget(await buildApp(repo));
@@ -75,7 +78,9 @@ void main() {
     await tester.pumpAndSettle();
 
     await tester.enterText(
-        find.byType(TextField), 'Catatan baru dari editor');
+      find.byKey(const ValueKey('note-body')),
+      'Catatan baru dari editor',
+    );
     // Autosave debounce is 600 ms.
     await tester.pump(const Duration(milliseconds: 700));
     await tester.pumpAndSettle();
@@ -90,7 +95,7 @@ void main() {
 
     await tester.tap(find.text('Write'));
     await tester.pumpAndSettle();
-    await tester.pageBack();
+    await tester.tap(find.byTooltip('Back'));
     await tester.pumpAndSettle();
 
     expect(await repo.all(), isEmpty);
@@ -118,21 +123,21 @@ void main() {
     expect(all.single.body, 'Akan dihapus');
   });
 
-  testWidgets('settings shows Indonesian as the selected default',
-      (tester) async {
+  testWidgets('settings shows Gemini and personal terminology', (tester) async {
     await tester.pumpWidget(await buildApp(repo));
     await tester.pumpAndSettle();
 
     await tester.tap(find.byTooltip('Settings'));
     await tester.pumpAndSettle();
-    expect(find.text('Indonesian'), findsOneWidget);
+    expect(find.text('Google (Gemini)'), findsOneWidget);
     expect(find.text('ENGINE'), findsOneWidget);
-    expect(find.text('SPEECH LANGUAGE'), findsOneWidget);
+    expect(find.text('Vocabulary'), findsOneWidget);
     expect(find.text('FLOATING BUBBLE'), findsOneWidget);
   });
 
-  testWidgets('dark theme is defined and uses inverse canvas/ink',
-      (tester) async {
+  testWidgets('dark theme is defined and uses inverse canvas/ink', (
+    tester,
+  ) async {
     final app = await buildApp(repo);
     expect(app, isNotNull);
     await tester.pumpWidget(app);

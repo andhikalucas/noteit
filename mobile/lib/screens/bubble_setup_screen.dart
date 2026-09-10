@@ -8,8 +8,7 @@ import '../services/settings_service.dart';
 import '../theme/vf_components.dart';
 import '../theme/vf_theme.dart';
 
-/// Onboarding for the off-app bubble: walks through the two scary-looking
-/// permissions in plain language, then flips the service on.
+/// Permissions and controls for dictation in other apps.
 class BubbleSetupScreen extends StatefulWidget {
   const BubbleSetupScreen({super.key});
 
@@ -22,6 +21,7 @@ class _BubbleSetupScreenState extends State<BubbleSetupScreen>
   bool _overlayOk = false;
   bool _accessibilityOk = false;
   bool _micOk = false;
+  bool _busy = false;
 
   @override
   void initState() {
@@ -38,29 +38,61 @@ class _BubbleSetupScreenState extends State<BubbleSetupScreen>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    // Returning from a system settings page — re-check statuses.
     if (state == AppLifecycleState.resumed) _refresh();
   }
 
   Future<void> _refresh() async {
     final bridge = context.read<OverlayBridge>();
-    final overlay = await bridge.hasOverlayPermission();
-    final a11y = await bridge.isAccessibilityEnabled();
-    final mic = await Permission.microphone.isGranted;
-    if (!mounted) return;
-    setState(() {
-      _overlayOk = overlay;
-      _accessibilityOk = a11y;
-      _micOk = mic;
-    });
+    final settings = context.read<SettingsService>();
+    try {
+      final overlay = await bridge.hasOverlayPermission();
+      final a11y = await bridge.isAccessibilityEnabled();
+      final mic = await Permission.microphone.isGranted;
+      final running = await bridge.isBubbleRunning();
+      if (!mounted) return;
+      if (settings.bubbleEnabled != running) settings.bubbleEnabled = running;
+      setState(() {
+        _overlayOk = overlay;
+        _accessibilityOk = a11y;
+        _micOk = mic;
+      });
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Could not check permissions. Reopen this screen to retry.',
+            ),
+          ),
+        );
+      }
+    }
   }
 
   Future<void> _toggleBubble() async {
     final settings = context.read<SettingsService>();
     final bridge = context.read<OverlayBridge>();
     final enable = !settings.bubbleEnabled;
-    await bridge.setBubbleEnabled(enable, locale: settings.locale);
-    settings.bubbleEnabled = enable;
+    setState(() => _busy = true);
+    try {
+      await bridge.syncSettings(settings);
+      await bridge.setBubbleEnabled(enable);
+      await _refresh();
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              enable
+                  ? 'Could not start the bubble. Try again.'
+                  : 'Could not stop the bubble. Try again.',
+            ),
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
   }
 
   @override
@@ -74,77 +106,89 @@ class _BubbleSetupScreenState extends State<BubbleSetupScreen>
     return Scaffold(
       appBar: AppBar(
         leading: IconButton(
+          tooltip: 'Back',
           icon: const Icon(PhosphorIconsRegular.arrowLeft),
           onPressed: () => Navigator.of(context).pop(),
         ),
         title: const VfEyebrow('Floating bubble'),
       ),
-      body: ListView(
-        padding: const EdgeInsets.all(16),
-        children: [
-          VfBlockCard(
-            color: VfTokens.lilac,
-            child: Text(
-              'The bubble floats above every app. Tap it, speak, and your '
-              'words are typed into whatever text field you were in.',
-              style: text.bodyLarge,
+      body: SafeArea(
+        top: false,
+        child: ListView(
+          padding: const EdgeInsets.all(16),
+          children: [
+            VfBlockCard(
+              color: VfTokens.lilac,
+              child: Text(
+                'Focus a text field, tap the bubble, and speak. '
+                'Tap again to transcribe.',
+                style: text.bodyLarge,
+              ),
             ),
-          ),
-          const SizedBox(height: 16),
-          _PermissionStep(
-            done: _micOk,
-            title: 'Microphone',
-            explanation: 'To hear you. Audio is processed by your device\'s '
-                'speech service and never stored.',
-            actionLabel: 'Allow',
-            onAction: () async {
-              await Permission.microphone.request();
-              _refresh();
-            },
-          ),
-          _PermissionStep(
-            done: _overlayOk,
-            title: 'Display over other apps',
-            explanation: 'So the bubble can float above other apps.',
-            actionLabel: 'Open settings',
-            onAction: () => bridge.openOverlaySettings(),
-          ),
-          _PermissionStep(
-            done: _accessibilityOk,
-            title: 'Accessibility service',
-            explanation:
-                'Lets noteit! type the transcript directly into the app '
-                'you\'re using. Without it, text is copied to the clipboard '
-                'instead. noteit! never reads your screen.',
-            actionLabel: 'Open settings',
-            onAction: () => bridge.openAccessibilitySettings(),
-          ),
-          const SizedBox(height: 16),
-          FilledButton.icon(
-            onPressed: ready || settings.bubbleEnabled ? _toggleBubble : null,
-            style: settings.bubbleEnabled
-                ? FilledButton.styleFrom(
-                    backgroundColor: VfTokens.coral,
-                    foregroundColor: VfTokens.onBlock)
-                : null,
-            icon: Icon(
+            const SizedBox(height: 16),
+            _PermissionStep(
+              done: _micOk,
+              title: 'Microphone',
+              explanation: 'Allow microphone access to record.',
+              actionLabel: 'Allow',
+              onAction: () async {
+                final status = await Permission.microphone.request();
+                if (status.isPermanentlyDenied) await openAppSettings();
+                if (mounted) _refresh();
+              },
+            ),
+            _PermissionStep(
+              done: _overlayOk,
+              title: 'Display over other apps',
+              explanation: 'Allow the mic bubble above other apps.',
+              actionLabel: 'Open settings',
+              onAction: () => bridge.openOverlaySettings(),
+            ),
+            _PermissionStep(
+              done: _accessibilityOk,
+              title: 'Accessibility service',
+              explanation:
+                  'Insert text into the current field. If disabled, copy '
+                  'the transcript and paste it yourself.',
+              actionLabel: 'Open settings',
+              onAction: () => bridge.openAccessibilitySettings(),
+            ),
+            const SizedBox(height: 16),
+            FilledButton.icon(
+              onPressed: !_busy && (ready || settings.bubbleEnabled)
+                  ? _toggleBubble
+                  : null,
+              style: settings.bubbleEnabled
+                  ? FilledButton.styleFrom(
+                      backgroundColor: VfTokens.coral,
+                      foregroundColor: VfTokens.onBlock,
+                    )
+                  : null,
+              icon: Icon(
                 settings.bubbleEnabled
                     ? PhosphorIconsRegular.power
                     : PhosphorIconsRegular.microphone,
-                size: 20),
-            label: Text(
-                settings.bubbleEnabled ? 'Turn bubble off' : 'Turn bubble on'),
-          ),
-          if (!ready && !settings.bubbleEnabled)
-            Padding(
-              padding: const EdgeInsets.only(top: 8),
-              child: Text(
-                'Microphone and overlay permissions are required first.',
-                style: text.bodyMedium,
-                textAlign: TextAlign.center,
+                size: 20,
+              ),
+              label: Text(
+                _busy
+                    ? 'Updating...'
+                    : settings.bubbleEnabled
+                    ? 'Turn bubble off'
+                    : 'Turn bubble on',
               ),
             ),
-        ],
+            if (!ready && !settings.bubbleEnabled)
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: Text(
+                  'Allow microphone access and display over other apps first.',
+                  style: text.bodyMedium,
+                  textAlign: TextAlign.center,
+                ),
+              ),
+          ],
+        ),
       ),
     );
   }
@@ -171,27 +215,32 @@ class _PermissionStep extends StatelessWidget {
     return Padding(
       padding: const EdgeInsets.only(bottom: 12),
       child: VfHairlineCard(
-        child: Row(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Icon(
-              done
-                  ? PhosphorIconsFill.checkCircle
-                  : PhosphorIconsRegular.circle,
-              size: 28,
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(title, style: text.titleMedium),
-                  const SizedBox(height: 2),
-                  Text(explanation, style: text.bodyMedium),
-                ],
-              ),
+            Row(
+              children: [
+                Icon(
+                  done
+                      ? PhosphorIconsFill.checkCircle
+                      : PhosphorIconsRegular.circle,
+                  size: 28,
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(title, style: text.titleMedium),
+                      const SizedBox(height: 2),
+                      Text(explanation, style: text.bodyMedium),
+                    ],
+                  ),
+                ),
+              ],
             ),
             if (!done) ...[
-              const SizedBox(width: 8),
+              const SizedBox(height: 12),
               OutlinedButton(onPressed: onAction, child: Text(actionLabel)),
             ],
           ],

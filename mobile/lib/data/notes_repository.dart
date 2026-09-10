@@ -12,18 +12,20 @@ class NotesRepository {
   Database? _db;
 
   NotesRepository({DatabaseFactory? factory, String? overridePath})
-      : _factory = factory ?? databaseFactory,
-        _overridePath = overridePath; // ignore: prefer_initializing_formals
+    : _factory = factory ?? databaseFactory,
+      _overridePath = overridePath; // ignore: prefer_initializing_formals
 
   Future<Database> _open() async {
     if (_db != null) return _db!;
-    final path = _overridePath ??
+    final path =
+        _overridePath ??
         p.join(await _factory.getDatabasesPath(), 'voiceflow.db');
     _db = await _factory.openDatabase(
       path,
       options: OpenDatabaseOptions(
-        version: 2,
-        onCreate: (db, _) => db.execute('''
+        version: 3,
+        onCreate: (db, _) async {
+          await db.execute('''
           CREATE TABLE notes(
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             title TEXT NOT NULL DEFAULT '',
@@ -31,13 +33,23 @@ class NotesRepository {
             created_at INTEGER NOT NULL,
             updated_at INTEGER NOT NULL
           )
-        '''),
+        ''');
+          await db.execute(
+            'CREATE TABLE dictation_receipts(session_id TEXT PRIMARY KEY, note_id INTEGER NOT NULL)',
+          );
+        },
         onUpgrade: (db, from, _) async {
           // v1 → v2: notes gain an explicit title (empty falls back to the
           // first body line at read time, so existing notes keep their look).
           if (from < 2) {
             await db.execute(
-                "ALTER TABLE notes ADD COLUMN title TEXT NOT NULL DEFAULT ''");
+              "ALTER TABLE notes ADD COLUMN title TEXT NOT NULL DEFAULT ''",
+            );
+          }
+          if (from < 3) {
+            await db.execute(
+              'CREATE TABLE dictation_receipts(session_id TEXT PRIMARY KEY, note_id INTEGER NOT NULL)',
+            );
           }
         },
       ),
@@ -53,8 +65,9 @@ class NotesRepository {
     final q = query.trim();
     // Date sorts order in SQL; title sorts on displayTitle (which folds in the
     // body-line fallback) in Dart below.
-    final orderBy =
-        sort == NoteSort.created ? 'created_at DESC' : 'updated_at DESC';
+    final orderBy = sort == NoteSort.created
+        ? 'created_at DESC'
+        : 'updated_at DESC';
     final rows = q.isEmpty
         ? await db.query('notes', orderBy: orderBy)
         : await db.query(
@@ -65,8 +78,11 @@ class NotesRepository {
           );
     final notes = rows.map(Note.fromMap).toList();
     if (sort == NoteSort.title) {
-      notes.sort((a, b) =>
-          a.displayTitle.toLowerCase().compareTo(b.displayTitle.toLowerCase()));
+      notes.sort(
+        (a, b) => a.displayTitle.toLowerCase().compareTo(
+          b.displayTitle.toLowerCase(),
+        ),
+      );
     }
     return notes;
   }
@@ -79,13 +95,59 @@ class NotesRepository {
 
   Future<void> update(Note note) async {
     final db = await _open();
-    await db.update('notes', note.toMap(),
-        where: 'id = ?', whereArgs: [note.id]);
+    await db.update(
+      'notes',
+      note.toMap(),
+      where: 'id = ?',
+      whereArgs: [note.id],
+    );
   }
 
   Future<void> delete(int id) async {
     final db = await _open();
     await db.delete('notes', where: 'id = ?', whereArgs: [id]);
+  }
+
+  /// Save the transcript and its delivery receipt together, including after an app restart.
+  Future<Note?> appendTranscript(
+    int noteId,
+    String sessionId,
+    String text,
+  ) async {
+    final db = await _open();
+    return db.transaction((txn) async {
+      final rows = await txn.query(
+        'notes',
+        where: 'id = ?',
+        whereArgs: [noteId],
+      );
+      if (rows.isEmpty) return null;
+      final note = Note.fromMap(rows.single);
+      final receipt = await txn.query(
+        'dictation_receipts',
+        where: 'session_id = ?',
+        whereArgs: [sessionId],
+      );
+      if (receipt.isNotEmpty) return note;
+      final separator = note.body.isEmpty || RegExp(r'\s$').hasMatch(note.body)
+          ? ''
+          : '\n\n';
+      final updated = note.copyWith(
+        body: '${note.body}$separator$text',
+        updatedAt: DateTime.now(),
+      );
+      await txn.update(
+        'notes',
+        updated.toMap(),
+        where: 'id = ?',
+        whereArgs: [noteId],
+      );
+      await txn.insert('dictation_receipts', {
+        'session_id': sessionId,
+        'note_id': noteId,
+      });
+      return updated;
+    });
   }
 
   Future<void> close() async {

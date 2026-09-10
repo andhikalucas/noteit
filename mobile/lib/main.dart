@@ -12,7 +12,9 @@ import 'theme/vf_theme.dart';
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   final settings = await SettingsService.load();
-  runApp(VoiceFlowApp(settings: settings, bridge: OverlayBridge()));
+  final bridge = OverlayBridge();
+  await bridge.syncSettings(settings);
+  runApp(VoiceFlowApp(settings: settings, bridge: bridge));
 }
 
 class VoiceFlowApp extends StatelessWidget {
@@ -20,8 +22,12 @@ class VoiceFlowApp extends StatelessWidget {
   final NotesRepository? repository;
   final OverlayBridge? bridge;
 
-  const VoiceFlowApp(
-      {super.key, required this.settings, this.repository, this.bridge});
+  const VoiceFlowApp({
+    super.key,
+    required this.settings,
+    this.repository,
+    this.bridge,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -31,9 +37,11 @@ class VoiceFlowApp extends StatelessWidget {
         ChangeNotifierProvider.value(value: settings),
         Provider<OverlayBridge>.value(value: overlayBridge),
         ChangeNotifierProvider(
-            create: (_) => NotesProvider(repository ?? NotesRepository())),
+          create: (_) => NotesProvider(repository ?? NotesRepository()),
+        ),
         ChangeNotifierProvider(
-            create: (_) => SpeechService(settings, overlayBridge)),
+          create: (_) => SpeechService(settings, overlayBridge),
+        ),
       ],
       child: MaterialApp(
         title: 'noteit!',

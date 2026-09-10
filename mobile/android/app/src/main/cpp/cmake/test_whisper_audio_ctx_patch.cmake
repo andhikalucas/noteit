@@ -1,0 +1,40 @@
+# Pure host source-transformation test. TEST_DIR must be a fresh temporary dir.
+# Copies the source; never patches the active Android build's source in place.
+if(NOT DEFINED ORIGINAL_WHISPER_SOURCE OR NOT EXISTS "${ORIGINAL_WHISPER_SOURCE}" OR NOT DEFINED TEST_DIR)
+    message(FATAL_ERROR "Pass ORIGINAL_WHISPER_SOURCE and TEST_DIR")
+endif()
+file(MAKE_DIRECTORY "${TEST_DIR}")
+set(_copy "${TEST_DIR}/whisper.cpp")
+set(_patch "${CMAKE_CURRENT_LIST_DIR}/patch_whisper_audio_ctx.cmake")
+configure_file("${ORIGINAL_WHISPER_SOURCE}" "${_copy}" COPYONLY)
+execute_process(COMMAND "${CMAKE_COMMAND}" "-DWHISPER_AUDIO_CTX_SOURCE=${_copy}" -P "${_patch}"
+    RESULT_VARIABLE _first)
+if(NOT _first EQUAL 0)
+    message(FATAL_ERROR "Initial source transformation failed")
+endif()
+file(SHA256 "${_copy}" _first_sha)
+execute_process(COMMAND "${CMAKE_COMMAND}" "-DWHISPER_AUDIO_CTX_SOURCE=${_copy}" -P "${_patch}"
+    RESULT_VARIABLE _second)
+file(SHA256 "${_copy}" _second_sha)
+if(NOT _second EQUAL 0 OR NOT _first_sha STREQUAL _second_sha)
+    message(FATAL_ERROR "Patch is not idempotent")
+endif()
+file(READ "${_copy}" _content)
+string(REGEX MATCHALL "state->exp_n_audio_ctx = params.audio_ctx" _assignments "${_content}")
+list(LENGTH _assignments _count)
+string(FIND "${_content}" "// overwrite audio_ctx, max allowed" _validation_index)
+string(FIND "${_content}" "// auto-detect language if not specified" _detection_index)
+if(NOT _count EQUAL 1 OR NOT _validation_index LESS _detection_index)
+    message(FATAL_ERROR "Expected exactly one context validation/assignment before detection")
+endif()
+
+# Unreviewed upstream or local edits must fail without rewriting any bytes.
+file(APPEND "${_copy}" "\n// unexpected source change\n")
+file(SHA256 "${_copy}" _changed_sha)
+execute_process(COMMAND "${CMAKE_COMMAND}" "-DWHISPER_AUDIO_CTX_SOURCE=${_copy}" -P "${_patch}"
+    RESULT_VARIABLE _rejected OUTPUT_QUIET ERROR_QUIET)
+file(SHA256 "${_copy}" _unchanged_sha)
+if(_rejected EQUAL 0 OR NOT _changed_sha STREQUAL _unchanged_sha)
+    message(FATAL_ERROR "Unexpected source was not safely rejected")
+endif()
+message(STATUS "Whisper patch tests passed: order, single assignment, idempotence, fail-closed source check")

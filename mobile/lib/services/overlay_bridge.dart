@@ -1,89 +1,86 @@
+import 'dart:async';
 import 'package:flutter/services.dart';
+import '../models/dictation_session.dart';
+import 'settings_service.dart';
 
-/// MethodChannel bridge to the native layer (OverlayService, InsertionService,
-/// and the shared WhisperEngine). Read-only queries are fire-and-forget safe:
-/// a missing native side (e.g. tests) degrades to inert defaults.
+/// Native sessions keep running when a Flutter screen is no longer visible.
 class OverlayBridge {
   static const _ch = MethodChannel('voiceflow/overlay');
-
+  final _sessions = StreamController<DictationSession>.broadcast();
   void Function(double)? _onProgress;
+  Stream<DictationSession> get sessions => _sessions.stream;
 
   OverlayBridge() {
     _ch.setMethodCallHandler((call) async {
       if (call.method == 'onWhisperProgress') {
         _onProgress?.call((call.arguments as num).toDouble());
+      } else if (call.method == 'onSession') {
+        _sessions.add(DictationSession.fromMap(call.arguments as Map));
       }
     });
   }
 
-  // ----- Permissions / bubble -----
-
   Future<bool> hasOverlayPermission() async =>
-      await _invoke<bool>('hasOverlayPermission') ?? false;
-
+      await _query<bool>('hasOverlayPermission') ?? false;
   Future<bool> isAccessibilityEnabled() async =>
-      await _invoke<bool>('isAccessibilityEnabled') ?? false;
-
-  Future<void> openOverlaySettings() => _invokeVoid('openOverlaySettings');
-
+      await _query<bool>('isAccessibilityEnabled') ?? false;
+  Future<bool> isBubbleRunning() async =>
+      await _query<bool>('isBubbleRunning') ?? false;
+  Future<bool> geminiConfigured() async =>
+      await _query<bool>('geminiConfigured') ?? false;
+  Future<void> openOverlaySettings() => _ch.invokeMethod('openOverlaySettings');
   Future<void> openAccessibilitySettings() =>
-      _invokeVoid('openAccessibilitySettings');
+      _ch.invokeMethod('openAccessibilitySettings');
+  Future<void> setBubbleEnabled(bool enabled, {String? locale}) =>
+      _ch.invokeMethod('setBubbleEnabled', {'enabled': enabled});
 
-  /// Starts/stops the floating bubble foreground service.
-  Future<void> setBubbleEnabled(bool enabled, {required String locale}) =>
-      _invokeVoid('setBubbleEnabled', {'enabled': enabled, 'locale': locale});
+  Future<void> syncSettings(SettingsService settings) async {
+    await _query<void>('syncSettings', {
+      'engine': settings.engine.id,
+      'vocabulary': settings.vocabulary,
+      'autocorrects': settings.autocorrectRules.map((r) => r.toMap()).toList(),
+    });
+  }
 
-  Future<void> setLocale(String locale) =>
-      _invokeVoid('setLocale', {'locale': locale});
+  Future<Map<String, dynamic>> localModelStatus() async {
+    final result = await _query<Map>('localModelStatus');
+    return result == null
+        ? {'downloaded': false, 'label': 'Local model', 'approxMb': 181}
+        : Map<String, dynamic>.from(result);
+  }
 
-  // ----- Engine selection (mirrored to native prefs for the bubble) -----
-
-  Future<void> setEngine(String engine) =>
-      _invokeVoid('setEngine', {'engine': engine});
-
-  Future<void> setWhisperModel(String model) =>
-      _invokeVoid('setWhisperModel', {'model': model});
-
-  Future<bool> whisperAvailable() async =>
-      await _invoke<bool>('whisperAvailable') ?? false;
-
-  Future<bool> whisperModelDownloaded(String model) async =>
-      await _invoke<bool>('whisperModelDownloaded', {'model': model}) ?? false;
-
-  /// Downloads the given model, reporting progress via [onProgress].
-  /// Throws [PlatformException] on failure (so the UI can show an error).
-  Future<void> downloadWhisperModel(String model,
-      {void Function(double)? onProgress}) async {
+  Future<void> downloadLocalModel({void Function(double)? onProgress}) async {
     _onProgress = onProgress;
     try {
-      await _ch.invokeMethod('downloadWhisperModel', {'model': model});
+      await _ch.invokeMethod('downloadLocalModel');
     } finally {
       _onProgress = null;
     }
   }
 
-  // ----- In-app notes Whisper (native record → transcribe) -----
+  Future<DictationSession> startSession(String source) async =>
+      DictationSession.fromMap(
+        (await _ch.invokeMethod<Map>('startSession', {'source': source}))!,
+      );
+  Future<void> stopSession(String id) =>
+      _ch.invokeMethod('stopSession', {'id': id});
+  Future<void> retrySession(String id, {String? engine}) =>
+      _ch.invokeMethod('retrySession', {'id': id, 'engine': ?engine});
+  Future<void> discardSession(String id) =>
+      _ch.invokeMethod('discardSession', {'id': id});
+  Future<void> acknowledgeSession(String id) =>
+      _ch.invokeMethod('acknowledgeSession', {'id': id});
+  Future<List<DictationSession>> pendingSessions(String source) async {
+    final result =
+        await _query<List>('pendingSessions', {'source': source}) ?? [];
+    return result.map((m) => DictationSession.fromMap(m as Map)).toList();
+  }
 
-  Future<bool> whisperStartRecording() async =>
-      await _invoke<bool>('whisperStartRecording') ?? false;
-
-  Future<String?> whisperStopAndTranscribe(
-          {required String lang, required String model}) =>
-      _invoke<String>('whisperStopAndTranscribe', {'lang': lang, 'model': model});
-
-  // ----- internals -----
-
-  Future<T?> _invoke<T>(String method, [Object? args]) async {
+  Future<T?> _query<T>(String method, [Object? args]) async {
     try {
       return await _ch.invokeMethod<T>(method, args);
-    } on PlatformException {
-      return null;
     } on MissingPluginException {
       return null;
     }
-  }
-
-  Future<void> _invokeVoid(String method, [Object? args]) async {
-    await _invoke<void>(method, args);
   }
 }

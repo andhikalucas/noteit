@@ -11,7 +11,9 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.content.res.Configuration
 import android.graphics.PixelFormat
+import android.graphics.Rect
 import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import android.os.Handler
@@ -21,9 +23,14 @@ import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
+import android.view.WindowInsets
 import android.widget.FrameLayout
 import android.widget.ImageView
+import android.widget.LinearLayout
+import android.widget.Button
+import android.widget.TextView
 import android.widget.Toast
+import android.widget.ScrollView
 import kotlin.concurrent.thread
 import kotlin.math.abs
 
@@ -52,12 +59,6 @@ class OverlayService : Service() {
         private const val COLOR_CORAL = 0xFFFF8577.toInt()
         private const val COLOR_PROC = 0xFF888888.toInt() // transcribing
 
-        /** Resets a stuck listening state (e.g. recognizer never calls back). */
-        private const val WATCHDOG_MS = 30_000L
-
-        /** Max Whisper recording before auto-finishing (transcribes what we have). */
-        private const val WHISPER_MAX_MS = 60_000L
-
         @Volatile
         var running = false
             private set
@@ -65,10 +66,13 @@ class OverlayService : Service() {
 
     private val handler = Handler(Looper.getMainLooper())
     private lateinit var windowManager: WindowManager
-    private lateinit var speech: SpeechEngine
-    private val capture = AudioCapture() // Whisper path
-    @Volatile private var whisperRecording = false
-    @Volatile private var whisperBusy = false // transcribing — ignore taps
+    private lateinit var coordinator: DictationCoordinator
+    private var session: Map<String, Any?>? = null
+    private var target: InsertionService.Target? = null
+    private var actionPanel: View? = null
+    private val sessionListener: (Map<String, Any?>) -> Unit = { update ->
+        if (update["source"] == "bubble") updateSession(update)
+    }
     private var bubble: FrameLayout? = null
     private var bubbleBg: GradientDrawable? = null
     private var bubbleSize = 0
@@ -76,14 +80,15 @@ class OverlayService : Service() {
     private var closeTargetBg: GradientDrawable? = null
     private var params: WindowManager.LayoutParams? = null
     private var pulse: ValueAnimator? = null
-    private val watchdog = Runnable { if (whisperRecording) finishWhisper() else resetToIdle() }
+    private val watchdog = Runnable { session?.get("id")?.let { coordinator.stop(it as String) } }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
         super.onCreate()
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
-        speech = SpeechEngine(this)
+        coordinator = DictationCoordinator.get(this)
+        coordinator.addListener(sessionListener)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -94,11 +99,8 @@ class OverlayService : Service() {
         startAsForeground()
         if (bubble == null) addBubble()
         running = true
-        // Preload the whisper context so the first tap transcribes immediately.
-        if (prefs().getString(KEY_ENGINE, "whisper") == "whisper") {
-            val size = prefs().getString(KEY_MODEL, "small").orEmpty()
-            thread { WhisperEngine.warmUp(this, size) }
-        }
+        coordinator.pending("bubble").lastOrNull()?.let { updateSession(it) }
+        if (DictationSettings.load(this).engine == "local") thread { WhisperEngine.warmUp(applicationContext, "small") }
         return START_STICKY
     }
 
@@ -106,30 +108,39 @@ class OverlayService : Service() {
         running = false
         handler.removeCallbacks(watchdog)
         pulse?.cancel()
-        speech.cancelAndReset()
-        if (whisperRecording) capture.abort()
+        coordinator.removeListener(sessionListener)
+        session?.takeIf { it["state"] == "recording" }?.get("id")?.let { coordinator.stop(it as String) }
+        hideActionPanel()
         hideCloseTarget()
         bubble?.let { windowManager.removeView(it) }
         bubble = null
         super.onDestroy()
     }
 
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        handler.post {
+            val view = bubble ?: return@post
+            params?.let { clamp(it); windowManager.updateViewLayout(view, it) }
+            hideCloseTarget()
+            if (actionPanel != null) showActions()
+        }
+    }
+
     // ----- Foreground plumbing -----
 
     private fun startAsForeground() {
         val nm = getSystemService(NotificationManager::class.java)
-        nm.createNotificationChannel(
-            NotificationChannel(
-                CHANNEL_ID, "Floating bubble", NotificationManager.IMPORTANCE_MIN
-            )
+        if (Build.VERSION.SDK_INT >= 26) nm.createNotificationChannel(
+            NotificationChannel(CHANNEL_ID, "Floating microphone", NotificationManager.IMPORTANCE_LOW)
         )
         val tapIntent = PendingIntent.getActivity(
             this, 0,
             Intent(this, MainActivity::class.java),
             PendingIntent.FLAG_IMMUTABLE
         )
-        val notification: Notification = Notification.Builder(this, CHANNEL_ID)
-            .setContentTitle("noteit! bubble is on")
+        val notification: Notification = (if (Build.VERSION.SDK_INT >= 26) Notification.Builder(this, CHANNEL_ID) else Notification.Builder(this))
+            .setContentTitle("Floating microphone")
             .setSmallIcon(R.drawable.ic_mic)
             .setContentIntent(tapIntent)
             .setOngoing(true)
@@ -171,7 +182,7 @@ class OverlayService : Service() {
         val prefs = getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         val lp = WindowManager.LayoutParams(
             size, size,
-            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            overlayType(),
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
             PixelFormat.TRANSLUCENT
         ).apply {
@@ -179,6 +190,7 @@ class OverlayService : Service() {
             x = prefs.getInt(KEY_X, 0)
             y = prefs.getInt(KEY_Y, dp(200))
         }
+        clamp(lp)
         params = lp
         layout.setOnTouchListener(DragTapListener(lp, size))
         windowManager.addView(layout, lp)
@@ -220,6 +232,8 @@ class OverlayService : Service() {
                         showCloseTarget()
                     }
                     if (dragging) {
+                        hideActionPanel()
+                        clamp(lp)
                         windowManager.updateViewLayout(v, lp)
                         highlightCloseTarget(isOverClose(lp))
                     }
@@ -234,12 +248,13 @@ class OverlayService : Service() {
                             return true
                         }
                         // Snap to the nearest side edge; keep the vertical position.
-                        val screenWidth = resources.displayMetrics.widthPixels
-                        lp.x = if (lp.x + size / 2 < screenWidth / 2) 0 else screenWidth - size
+                        val bounds = usableBounds()
+                        lp.x = if (lp.x + size / 2 < bounds.centerX()) bounds.left else bounds.right - size
+                        clamp(lp)
                         windowManager.updateViewLayout(v, lp)
                         getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
                             .putInt(KEY_X, lp.x).putInt(KEY_Y, lp.y).apply()
-                    } else {
+                    } else if (e.actionMasked == MotionEvent.ACTION_UP) {
                         onBubbleTapped()
                     }
                     return true
@@ -253,9 +268,8 @@ class OverlayService : Service() {
 
     /** Center of the close target, in TOP|START overlay coordinates. */
     private fun closeCenter(): Pair<Int, Int> {
-        val w = resources.displayMetrics.widthPixels
-        val h = resources.displayMetrics.heightPixels
-        return Pair(w / 2, h - dp(96))
+        val bounds = usableBounds()
+        return Pair(bounds.centerX(), bounds.bottom - dp(80))
     }
 
     private fun isOverClose(lp: WindowManager.LayoutParams): Boolean {
@@ -288,13 +302,15 @@ class OverlayService : Service() {
         }
         val lp = WindowManager.LayoutParams(
             target, target,
-            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            overlayType(),
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
                 WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
             PixelFormat.TRANSLUCENT,
         ).apply {
-            gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
-            y = dp(64) // margin above the bottom edge
+            gravity = Gravity.TOP or Gravity.START
+            val center = closeCenter()
+            x = center.first - target / 2
+            y = center.second - target / 2
         }
         windowManager.addView(layout, lp)
         closeTarget = layout
@@ -323,131 +339,153 @@ class OverlayService : Service() {
         stopSelf()
     }
 
-    // ----- Dictation -----
-
-    private fun prefs() = getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+    // ----- Shared dictation sessions -----
 
     private fun onBubbleTapped() {
-        if (prefs().getString(KEY_ENGINE, "whisper") == "whisper") onTapWhisper()
-        else onTapGoogle()
-    }
-
-    // ----- Google (SpeechRecognizer, streaming) -----
-
-    private fun onTapGoogle() {
-        if (speech.listening) {
-            speech.stop() // finish utterance, results still delivered
-            return
-        }
-        val locale = prefs().getString(KEY_LOCALE, "id-ID").orEmpty()
-        speech.start(locale, object : SpeechEngine.Listener {
-            override fun onFinal(text: String) = deliver(text)
-
-            override fun onError(message: String) {
-                flash(COLOR_CORAL)
-                toast(message)
-            }
-
-            override fun onListeningChanged(listening: Boolean) {
-                handler.removeCallbacks(watchdog)
-                if (listening) {
-                    setBubbleColor(COLOR_LIME)
-                    startPulse()
-                    handler.postDelayed(watchdog, WATCHDOG_MS)
-                } else {
-                    resetToIdle()
+        hideActionPanel()
+        try {
+            when (session?.get("state")) {
+                "recording" -> coordinator.stop(session!!["id"] as String)
+                "processing", "failed", "completed" -> showActions()
+                else -> {
+                    target = InsertionService.instance?.captureTarget()
+                    updateSession(coordinator.start("bubble"))
                 }
             }
-        })
-    }
-
-    // ----- Whisper (on-device, record-then-transcribe) -----
-
-    private fun onTapWhisper() {
-        if (whisperBusy) return
-        if (whisperRecording) {
-            finishWhisper()
-            return
-        }
-        if (!WhisperNative.available) {
-            flash(COLOR_CORAL); toast("Speech engine unavailable"); return
-        }
-        val size = prefs().getString(KEY_MODEL, "small").orEmpty()
-        if (!ModelStore.isDownloaded(this, size)) {
-            flash(COLOR_CORAL); toast("Download the model in noteit! settings"); return
-        }
-        try {
-            capture.start()
         } catch (e: Exception) {
-            flash(COLOR_CORAL); toast("Microphone unavailable"); return
+            flash(COLOR_CORAL)
+            toast((e as? DictationException)?.message ?: "Could not start recording.")
         }
-        whisperRecording = true
-        setBubbleColor(COLOR_LIME)
-        startPulse()
-        handler.postDelayed(watchdog, WHISPER_MAX_MS)
     }
 
-    private fun finishWhisper() {
+    private fun updateSession(update: Map<String, Any?>) {
+        if (update["state"] == "cancelled" && session != null && session!!["id"] != update["id"]) return
+        session = update
         handler.removeCallbacks(watchdog)
-        whisperRecording = false
-        whisperBusy = true
         pulse?.cancel(); pulse = null
         bubble?.scaleX = 1f; bubble?.scaleY = 1f
-        setBubbleColor(COLOR_PROC) // "working" while transcribing
-
-        val size = prefs().getString(KEY_MODEL, "small").orEmpty()
-        val lang = whisperLang(prefs().getString(KEY_LOCALE, "id-ID").orEmpty())
-        val samples = capture.stop()
-        thread {
-            val text = try {
-                WhisperEngine.transcribe(this, size, samples, lang, null)
-            } catch (e: Exception) {
-                null
+        when (update["state"]) {
+            "recording" -> {
+                setBubbleColor(COLOR_LIME); startPulse()
+                handler.postDelayed(watchdog, 10 * 60_000L)
             }
-            handler.post {
-                whisperBusy = false
-                setBubbleColor(COLOR_INK)
-                if (text.isNullOrBlank()) {
-                    flash(COLOR_CORAL); toast("Didn't catch that")
-                } else {
-                    deliver(text)
+            "processing" -> setBubbleColor(COLOR_PROC)
+            "failed" -> { setBubbleColor(COLOR_CORAL); showActions() }
+            "completed" -> {
+                hideActionPanel()
+                val text = update["text"] as? String
+                try {
+                    if (!text.isNullOrBlank() && coordinator.beginExternalDelivery(update["id"] as String)) {
+                        deliver(text)
+                        clearDelivered(update["id"] as String)
+                    } else { setBubbleColor(COLOR_CORAL); showActions() }
+                } catch (_: Exception) {
+                    // A successful field write and our journal cannot be atomic.
+                    // Keep the text but never repeat an automatic insertion.
+                    target = null
+                    setBubbleColor(COLOR_CORAL)
+                    toast("Transcript saved. Tap the bubble to copy or clear it.")
+                    showActions()
                 }
             }
+            "cancelled" -> { hideActionPanel(); session = null; target = null; setBubbleColor(COLOR_INK) }
         }
     }
 
-    /** Whisper wants a language, not a region: "id-ID" → "id", "" → auto. */
-    private fun whisperLang(locale: String): String? {
-        val l = locale.trim()
-        if (l.isEmpty()) return null
-        return l.substringBefore('-').lowercase()
+    private fun showActions() {
+        hideActionPanel()
+        val current = session ?: return
+        val id = current["id"] as String
+        val failed = current["state"] == "failed"
+        val completed = current["state"] == "completed"
+        val panel = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(12), dp(8), dp(12), dp(8))
+            background = GradientDrawable().apply { setColor(0xFFF5F5F5.toInt()); cornerRadius = dp(16).toFloat() }
+            addView(TextView(this@OverlayService).apply {
+                text = if (failed) (current["error"] as? String ?: "Transcription failed.")
+                    else if (completed) "Transcript saved. Check the field before copying again." else "Transcribing..."
+                setTextColor(COLOR_INK); textSize = 14f
+            })
+        }
+        fun action(label: String, block: () -> Unit) {
+            panel.addView(Button(this).apply {
+                text = label
+                setOnClickListener {
+                    hideActionPanel()
+                    try { block() } catch (e: Exception) { toast((e as? DictationException)?.message ?: "Could not complete the action.") }
+                }
+            })
+        }
+        if (failed) {
+            action("Retry") { coordinator.retry(id, null) }
+            if (current["engine"] != "local") action("Use local") { coordinator.retry(id, "local") }
+        }
+        if (completed) {
+            action("Copy") {
+                coordinator.beginExternalDelivery(id)
+                getSystemService(ClipboardManager::class.java).setPrimaryClip(
+                    ClipData.newPlainText("noteit!", current["text"] as? String ?: ""))
+                clearDelivered(id)
+                toast("Copied.")
+            }
+            action("Clear") { clearDelivered(id) }
+        } else action("Discard") { coordinator.discard(id) }
+        val bounds = usableBounds()
+        val width = minOf(dp(280), bounds.width())
+        panel.measure(View.MeasureSpec.makeMeasureSpec(width, View.MeasureSpec.EXACTLY),
+            View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED))
+        val scroll = ScrollView(this).apply { addView(panel) }
+        val height = minOf(panel.measuredHeight, maxOf(dp(48), bounds.height() - dp(32)))
+        val lp = WindowManager.LayoutParams(width, height, overlayType(),
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE, PixelFormat.TRANSLUCENT).apply {
+            gravity = Gravity.TOP or Gravity.START
+            x = bounds.left + (bounds.width() - width) / 2
+            y = bounds.top + minOf(dp(64), maxOf(0, bounds.height() - height - dp(16)))
+        }
+        windowManager.addView(scroll, lp)
+        actionPanel = scroll
+    }
+
+    private fun hideActionPanel() {
+        actionPanel?.let { runCatching { windowManager.removeView(it) } }
+        actionPanel = null
+    }
+
+    private fun clearDelivered(id: String) {
+        coordinator.acknowledge(id)
+        hideActionPanel()
+        session = null; target = null; setBubbleColor(COLOR_INK)
     }
 
     private fun deliver(text: String) {
-        val inserted = try {
-            InsertionService.instance?.insertIntoFocused(text) == true
-        } catch (_: Exception) {
-            false
-        }
+        val inserted = runCatching {
+            target?.let { InsertionService.instance?.insertIntoTarget(it, text) } == true
+        }.getOrDefault(false)
         if (!inserted) {
-            val cm = getSystemService(ClipboardManager::class.java)
-            cm.setPrimaryClip(ClipData.newPlainText("noteit!", text))
-            toast("Copied — long-press to paste")
+            getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText("noteit!", text))
+            toast("Copied to clipboard.")
         }
     }
 
-    private fun resetToIdle() {
-        handler.removeCallbacks(watchdog)
-        pulse?.cancel()
-        pulse = null
-        bubble?.scaleX = 1f
-        bubble?.scaleY = 1f
-        if (speech.listening) speech.cancelAndReset()
-        if (whisperRecording) {
-            whisperRecording = false
-            capture.abort()
+    private fun overlayType(): Int = if (Build.VERSION.SDK_INT >= 26)
+        WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY else WindowManager.LayoutParams.TYPE_PHONE
+
+    private fun usableBounds(): Rect {
+        if (Build.VERSION.SDK_INT >= 30) {
+            val metrics = windowManager.currentWindowMetrics
+            val insets = metrics.windowInsets.getInsetsIgnoringVisibility(
+                WindowInsets.Type.systemBars() or WindowInsets.Type.displayCutout())
+            return Rect(0, 0, metrics.bounds.width() - insets.left - insets.right,
+                metrics.bounds.height() - insets.top - insets.bottom)
         }
-        setBubbleColor(COLOR_INK)
+        return Rect(0, 0, resources.displayMetrics.widthPixels, resources.displayMetrics.heightPixels)
+    }
+
+    private fun clamp(lp: WindowManager.LayoutParams) {
+        val b = usableBounds()
+        lp.x = lp.x.coerceIn(b.left, maxOf(b.left, b.right - lp.width))
+        lp.y = lp.y.coerceIn(b.top, maxOf(b.top, b.bottom - lp.height))
     }
 
     private fun setBubbleColor(color: Int) {
@@ -456,7 +494,7 @@ class OverlayService : Service() {
 
     private fun flash(color: Int) {
         setBubbleColor(color)
-        handler.postDelayed({ if (!speech.listening) setBubbleColor(COLOR_INK) }, 900)
+        handler.postDelayed({ if (session == null) setBubbleColor(COLOR_INK) }, 900)
     }
 
     private fun startPulse() {

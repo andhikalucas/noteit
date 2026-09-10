@@ -1,22 +1,19 @@
 /// Which speech-to-text engine powers dictation.
 enum SttEngine {
-  /// On-device whisper.cpp (our engine). Private, offline, better tuned for
-  /// glossary biasing — but record-then-transcribe (no live partials).
-  whisper,
-
-  /// Android's built-in SpeechRecognizer (Google). Streams live partials and
-  /// is strong on Indonesian/code-switching, but audio may leave the device.
-  google;
+  gemini,
+  local;
 
   String get id => name;
 
-  static SttEngine fromId(String? v) =>
-      SttEngine.values.firstWhere((e) => e.name == v, orElse: () => SttEngine.whisper);
+  static SttEngine fromId(String? v) => switch (v) {
+    'local' || 'whisper' => SttEngine.local,
+    _ => SttEngine.gemini,
+  };
 
   String get label => switch (this) {
-        SttEngine.whisper => 'noteit! (on-device)',
-        SttEngine.google => 'Google',
-      };
+    SttEngine.gemini => 'Google (Gemini)',
+    SttEngine.local => 'Local',
+  };
 }
 
 /// Whisper model size — larger = more accurate (esp. non-English) but bigger
@@ -33,14 +30,14 @@ enum WhisperModelSize {
 
   /// Approximate on-disk size (q5_1 quantized), for the download UI.
   int get approxMb => switch (this) {
-        WhisperModelSize.tiny => 30,
-        WhisperModelSize.base => 56,
-        WhisperModelSize.small => 181,
-      };
+    WhisperModelSize.tiny => 30,
+    WhisperModelSize.base => 56,
+    WhisperModelSize.small => 181,
+  };
 
   String get label => switch (this) {
-        WhisperModelSize.tiny => 'Tiny · 30 MB',
-        WhisperModelSize.base => 'Base · 56 MB',
-        WhisperModelSize.small => 'Small · 181 MB',
-      };
+    WhisperModelSize.tiny => 'Tiny · 30 MB',
+    WhisperModelSize.base => 'Base · 56 MB',
+    WhisperModelSize.small => 'Small · 181 MB',
+  };
 }

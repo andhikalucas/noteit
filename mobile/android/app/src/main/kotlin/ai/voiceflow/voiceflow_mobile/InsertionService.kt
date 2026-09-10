@@ -8,10 +8,52 @@ import android.view.accessibility.AccessibilityNodeInfo
 
 /**
  * Inserts transcribed text directly into the focused editable field of
- * whatever app the user is in. Purely write-only: it never reads or reports
- * screen content anywhere.
+ * whatever app the user is in. The target field is read locally to preserve
+ * its text and selection; that content is never sent to a transcription provider.
  */
 class InsertionService : AccessibilityService() {
+
+    data class Target(val identity: AccessibilityNodeInfo,
+        val packageName: String, val windowId: Int, val viewId: String?,
+        val text: String, val selectionStart: Int, val selectionEnd: Int)
+
+    fun captureTarget(): Target? {
+        val node = rootInActiveWindow?.findFocus(AccessibilityNodeInfo.FOCUS_INPUT) ?: return null
+        return targetFrom(node)
+    }
+
+    private fun targetFrom(node: AccessibilityNodeInfo): Target? {
+        if (!node.isEditable || node.isPassword) return null
+        val hint = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && node.isShowingHintText
+        return Target(node, node.packageName?.toString() ?: return null, node.windowId, node.viewIdResourceName,
+            if (hint) "" else node.text?.toString().orEmpty(), node.textSelectionStart, node.textSelectionEnd)
+    }
+
+    /** Only insert if the original field and its contents/selection are still current. */
+    fun insertIntoTarget(target: Target, text: String): Boolean {
+        val node = rootInActiveWindow?.findFocus(AccessibilityNodeInfo.FOCUS_INPUT) ?: return false
+        if (!node.refresh()) return false
+        // AccessibilityNodeInfo.equals compares source-node identity and window ID.
+        // Text and resource ID alone cannot distinguish two empty fields in one app.
+        val current = targetFrom(node) ?: return false
+        if (current != target || !node.isFocused) return false
+        val start = target.selectionStart.takeIf { it in 0..target.text.length } ?: target.text.length
+        val end = target.selectionEnd.takeIf { it in start..target.text.length } ?: start
+        val before = target.text.substring(0, start)
+        val after = target.text.substring(end)
+        val prefix = if (before.isNotEmpty() && !before.last().isWhitespace()) " " else ""
+        val suffix = if (after.isNotEmpty() && !after.first().isWhitespace() && after.first().isLetterOrDigit()) " " else ""
+        val combined = before + prefix + text + suffix + after
+        val ok = node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, Bundle().apply {
+            putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, combined)
+        })
+        if (ok) node.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION, Bundle().apply {
+            val cursor = before.length + prefix.length + text.length
+            putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, cursor)
+            putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, cursor)
+        })
+        return ok
+    }
 
     companion object {
         @Volatile
@@ -34,39 +76,4 @@ class InsertionService : AccessibilityService() {
 
     override fun onInterrupt() {}
 
-    /**
-     * Appends [text] to the focused editable field. Returns false when no
-     * editable field has input focus (caller falls back to clipboard).
-     */
-    fun insertIntoFocused(text: String): Boolean {
-        val root = rootInActiveWindow ?: return false
-        val node = root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT) ?: return false
-        if (!node.isEditable) return false
-
-        val showingHint =
-            Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && node.isShowingHintText
-        val existing = if (showingHint) "" else node.text?.toString().orEmpty()
-        val sep = when {
-            existing.isEmpty() -> ""
-            existing.endsWith(" ") || existing.endsWith("\n") -> ""
-            else -> " "
-        }
-        val combined = existing + sep + text
-
-        val args = Bundle().apply {
-            putCharSequence(
-                AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,
-                combined
-            )
-        }
-        val ok = node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
-        if (ok) {
-            val sel = Bundle().apply {
-                putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, combined.length)
-                putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, combined.length)
-            }
-            node.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION, sel)
-        }
-        return ok
-    }
 }

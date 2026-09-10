@@ -1,0 +1,4 @@
+{
+    global: Java_ai_voiceflow_voiceflow_1mobile_LocalCleanupNative_*;
+    local: *;
+};

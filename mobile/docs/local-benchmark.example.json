@@ -1,0 +1,13 @@
+{
+  "seed": 42,
+  "repetitions": 3,
+  "cooldownMs": 5000,
+  "recordings": [
+    {"id": "mixed-20-tune", "file": "recordings/mixed-20.wav", "languageGroup": "mixed", "split": "tune", "reference": "Replace this with the verbatim spoken words, including fillers and corrections."}
+  ],
+  "configurations": [
+    {"id": "original-small-id", "model": "small", "threads": 4, "scaledContext": true, "language": "id", "pipeline": false, "paced": false, "cold": false, "downloadModel": true},
+    {"id": "small-auto-fast", "model": "small", "threads": 4, "scaledContext": true, "language": "auto", "pipeline": true, "paced": false, "cold": false, "downloadModel": true},
+    {"id": "small-auto-paced", "model": "small", "threads": 4, "scaledContext": true, "language": "auto", "pipeline": true, "paced": true, "cold": false, "downloadModel": true}
+  ]
+}

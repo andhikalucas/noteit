@@ -1,148 +1,240 @@
 import 'dart:async';
-
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:phosphor_icons/phosphor_icons.dart';
 import 'package:provider/provider.dart';
-
 import '../data/notes_provider.dart';
 import '../models/note.dart';
 import '../services/speech_service.dart';
 import '../theme/vf_components.dart';
 import '../theme/vf_theme.dart';
-import 'settings_screen.dart';
 
 class NoteEditorScreen extends StatefulWidget {
   final Note? note;
   final bool startDictating;
-
   const NoteEditorScreen({super.key, this.note, this.startDictating = false});
-
   @override
   State<NoteEditorScreen> createState() => _NoteEditorScreenState();
 }
 
-class _NoteEditorScreenState extends State<NoteEditorScreen> {
+class _NoteEditorScreenState extends State<NoteEditorScreen>
+    with WidgetsBindingObserver {
   late final TextEditingController _titleCtl;
   late final TextEditingController _ctl;
+  late final NotesProvider _notes;
+  late final SpeechService _speech;
   Note? _note;
   Timer? _autosave;
+  Future<void> _saveTail = Future.value();
+  bool _skipSave = false;
+  bool _applying = false;
+  bool _starting = false;
   bool _micDenied = false;
-
-  /// Text before the current utterance started; partials replace what follows.
-  String _preSpeechText = '';
+  bool _closed = false;
+  bool _backgrounded = false;
+  String? _deliveryError;
+  String? _saveError;
+  String? get _source => _note?.id == null ? null : 'note:${_note!.id}';
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _notes = context.read<NotesProvider>();
+    _speech = context.read<SpeechService>();
     _note = widget.note;
     _titleCtl = TextEditingController(text: _note?.title ?? '');
     _ctl = TextEditingController(text: _note?.body ?? '');
     _titleCtl.addListener(_scheduleAutosave);
     _ctl.addListener(_scheduleAutosave);
-    if (widget.startDictating) {
-      WidgetsBinding.instance.addPostFrameCallback((_) => _toggleDictation());
-    }
+    _speech.addListener(_speechChanged);
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted) return;
+      if (_source != null) await _speech.connect(_source!);
+      if (mounted && widget.startDictating) await _toggleDictation();
+    });
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _closed = true;
     _autosave?.cancel();
-    _flushSave();
+    _speech.removeListener(_speechChanged);
+    if (_source != null) {
+      unawaited(_speech.stop().catchError((Object _) {}));
+      _speech.disconnect(_source!);
+    }
+    if (!_skipSave && !_applying) {
+      unawaited(_flushSave().catchError((Object _) {}));
+    }
     _titleCtl.dispose();
     _ctl.dispose();
     super.dispose();
   }
 
-  void _scheduleAutosave() {
-    _autosave?.cancel();
-    _autosave = Timer(const Duration(milliseconds: 600), _flushSave);
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    _backgrounded =
+        state == AppLifecycleState.hidden ||
+        state == AppLifecycleState.paused ||
+        state == AppLifecycleState.detached;
+    // Notes don't own a foreground microphone service. Finish the captured
+    // audio on Home/lock instead of displaying a recording that receives silence.
+    if (_backgrounded && _speech.listening) {
+      unawaited(_action(_speech.stop));
+    }
   }
 
-  Future<void> _flushSave() async {
+  void _scheduleAutosave() {
+    if (_skipSave || _applying) return;
+    _autosave?.cancel();
+    _autosave = Timer(const Duration(milliseconds: 600), () {
+      unawaited(
+        _flushSave().catchError((Object _) {
+          if (mounted) {
+            setState(() => _saveError = 'Could not save. Try again.');
+          }
+        }),
+      );
+    });
+  }
+
+  Future<void> _flushSave() {
+    if (_skipSave) return _saveTail;
+    _autosave?.cancel();
     final title = _titleCtl.text;
     final body = _ctl.text;
-    final provider = context.read<NotesProvider>();
-    if (_note == null) {
-      // Never save an empty untouched note.
-      if (title.trim().isEmpty && body.trim().isEmpty) return;
-      _note = await provider.create(title: title, body: body);
-    } else if (_note!.title != title || _note!.body != body) {
-      _note = await provider.save(_note!, title: title, body: body);
+    _saveTail = _saveTail.catchError((Object _) {}).then((_) async {
+      if (_skipSave) return;
+      if (_note == null) {
+        if (title.trim().isEmpty && body.trim().isEmpty) return;
+        _note = await _notes.create(title: title, body: body);
+      } else if (_note!.title != title || _note!.body != body) {
+        _note = await _notes.save(_note!, title: title, body: body);
+      }
+    });
+    return _saveTail;
+  }
+
+  void _speechChanged() {
+    if (!_closed && _speech.session?.completed == true && !_applying) {
+      unawaited(_applyTranscript());
+    }
+  }
+
+  Future<void> _applyTranscript() async {
+    final session = _speech.session;
+    if (_applying || session?.completed != true || session!.source != _source) {
+      return;
+    }
+    setState(() {
+      _applying = true;
+      _deliveryError = null;
+    });
+    try {
+      await _flushSave();
+      final note = await _notes.appendTranscript(
+        _note!.id!,
+        session.id,
+        session.text ?? '',
+      );
+      if (note == null) throw StateError('The note no longer exists');
+      _note = note;
+      if (mounted) {
+        _ctl.text = note.body;
+        _ctl.selection = TextSelection.collapsed(offset: _ctl.text.length);
+      }
+      await _speech.acknowledge(session.id);
+    } catch (_) {
+      if (mounted) {
+        setState(() => _deliveryError = 'Could not save the transcript.');
+      }
+    } finally {
+      if (mounted) setState(() => _applying = false);
+    }
+  }
+
+  Future<void> _action(Future<void> Function() action) async {
+    try {
+      await action();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              e is PlatformException
+                  ? e.message ?? 'Could not complete the action.'
+                  : 'Could not complete the action.',
+            ),
+          ),
+        );
+      }
     }
   }
 
   Future<void> _toggleDictation() async {
-    final speech = context.read<SpeechService>();
-
-    if (speech.listening || speech.transcribing) {
-      await speech.stop();
+    if (_speech.listening) {
+      await _action(_speech.stop);
       return;
     }
-
-    final mic = await Permission.microphone.request();
-    if (!mic.isGranted) {
-      setState(() => _micDenied = true);
-      return;
-    }
-    setState(() => _micDenied = false);
-
-    _preSpeechText = _ctl.text;
-    final error = await speech.start((text, isFinal) {
-      final sep = _preSpeechText.isEmpty || _preSpeechText.endsWith('\n')
-          ? ''
-          : ' ';
-      _ctl.text = '$_preSpeechText$sep$text';
-      _ctl.selection = TextSelection.collapsed(offset: _ctl.text.length);
-      if (isFinal) _preSpeechText = _ctl.text;
+    if (_starting || _speech.transcribing || _speech.session != null) return;
+    setState(() => _starting = true);
+    await _action(() async {
+      final permission = await Permission.microphone.request();
+      if (!mounted) return;
+      if (!permission.isGranted) {
+        setState(() => _micDenied = true);
+        return;
+      }
+      setState(() => _micDenied = false);
+      await _flushSave();
+      _note ??= await _notes.create();
+      if (!mounted || _backgrounded) return;
+      await _speech.start(_source!);
+      if (_backgrounded) await _speech.stop();
     });
-
-    if (error != null && mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text(error),
-        action: error.contains('Settings')
-            ? SnackBarAction(
-                label: 'Settings',
-                onPressed: () => Navigator.of(context).push(MaterialPageRoute(
-                    builder: (_) => const SettingsScreen())),
-              )
-            : null,
-      ));
-    }
+    if (mounted) setState(() => _starting = false);
   }
 
   Future<void> _delete() async {
-    final provider = context.read<NotesProvider>();
-    final messenger = ScaffoldMessenger.of(context);
-    final nav = Navigator.of(context);
-    if (_note != null) {
-      final deleted = _note!;
+    await _action(() async {
       _autosave?.cancel();
-      _note = null; // stop autosave resurrecting it
-      _titleCtl.removeListener(_scheduleAutosave);
-      _ctl.removeListener(_scheduleAutosave);
-      await provider.delete(deleted);
-      messenger.showSnackBar(SnackBar(
-        content: const Text('Note deleted'),
-        action: SnackBarAction(
-          label: 'Undo',
-          onPressed: provider.undoDelete,
-        ),
-      ));
-    }
-    nav.pop();
+      await _saveTail;
+      if (_note != null) {
+        await _speech.discard();
+        final deleted = _note!;
+        _skipSave = true;
+        try {
+          await _notes.delete(deleted);
+        } catch (_) {
+          _skipSave = false;
+          rethrow;
+        }
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: const Text('Note deleted'),
+            action: SnackBarAction(label: 'Undo', onPressed: _notes.undoDelete),
+          ),
+        );
+      } else {
+        _skipSave = true;
+      }
+      if (mounted) Navigator.of(context).pop();
+    });
   }
 
   @override
   Widget build(BuildContext context) {
     final speech = context.watch<SpeechService>();
-    final listening = speech.listening;
-    final transcribing = speech.transcribing;
-    final active = listening || transcribing;
-
+    final session = speech.session;
+    final busy = speech.transcribing || _applying || _starting;
     return Scaffold(
       appBar: AppBar(
         leading: IconButton(
+          tooltip: 'Back',
           icon: const Icon(PhosphorIconsRegular.arrowLeft),
           onPressed: () => Navigator.of(context).pop(),
         ),
@@ -150,8 +242,8 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
         actions: [
           PopupMenuButton<String>(
             icon: const Icon(PhosphorIconsRegular.dotsThreeVertical),
-            onSelected: (v) {
-              if (v == 'delete') _delete();
+            onSelected: (_) {
+              if (!_applying) _delete();
             },
             itemBuilder: (_) => const [
               PopupMenuItem(value: 'delete', child: Text('Delete note')),
@@ -159,110 +251,176 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
           ),
         ],
       ),
-      body: Column(
-        children: [
-          if (_micDenied) const _MicDeniedCard(),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-            child: TextField(
-              controller: _titleCtl,
-              maxLines: 1,
-              textCapitalization: TextCapitalization.sentences,
-              textInputAction: TextInputAction.next,
-              style: Theme.of(context).textTheme.headlineMedium,
-              decoration: const InputDecoration(
-                border: InputBorder.none,
-                enabledBorder: InputBorder.none,
-                focusedBorder: InputBorder.none,
-                hintText: 'Title',
-                isDense: true,
-                contentPadding: EdgeInsets.zero,
-              ),
-            ),
-          ),
-          Expanded(
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: TextField(
-                controller: _ctl,
-                maxLines: null,
-                expands: true,
-                textAlignVertical: TextAlignVertical.top,
-                textCapitalization: TextCapitalization.sentences,
-                style: Theme.of(context).textTheme.bodyLarge,
-                decoration: const InputDecoration(
-                  border: InputBorder.none,
-                  enabledBorder: InputBorder.none,
-                  focusedBorder: InputBorder.none,
-                  hintText: 'Start typing or dictate…',
+      body: SafeArea(
+        top: false,
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final minimumHeight = MediaQuery.textScalerOf(context).scale(
+              340 +
+                  (session?.failed == true ? 140 : 0) +
+                  (_micDenied ? 72 : 0) +
+                  (_saveError != null ? 72 : 0) +
+                  (_deliveryError != null ? 72 : 0),
+            );
+            return SingleChildScrollView(
+              child: SizedBox(
+                height: constraints.maxHeight < minimumHeight
+                    ? minimumHeight
+                    : constraints.maxHeight,
+                child: Column(
+                  children: [
+                    if (_micDenied)
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 16),
+                        child: Row(
+                          children: [
+                            const Expanded(
+                              child: Text('Allow microphone access to record.'),
+                            ),
+                            TextButton(
+                              onPressed: openAppSettings,
+                              child: const Text('Open settings'),
+                            ),
+                          ],
+                        ),
+                      ),
+                    if (_saveError != null)
+                      TextButton(
+                        onPressed: () => _action(() async {
+                          await _flushSave();
+                          if (mounted) setState(() => _saveError = null);
+                        }),
+                        child: Text(_saveError!),
+                      ),
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+                      child: TextField(
+                        key: const ValueKey('note-title'),
+                        controller: _titleCtl,
+                        enabled: !_applying,
+                        maxLines: 1,
+                        textCapitalization: TextCapitalization.sentences,
+                        textInputAction: TextInputAction.next,
+                        style: Theme.of(context).textTheme.headlineMedium,
+                        decoration: const InputDecoration(
+                          border: InputBorder.none,
+                          enabledBorder: InputBorder.none,
+                          focusedBorder: InputBorder.none,
+                          hintText: 'Title',
+                          isDense: true,
+                          contentPadding: EdgeInsets.zero,
+                        ),
+                      ),
+                    ),
+                    Expanded(
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 16),
+                        child: TextField(
+                          key: const ValueKey('note-body'),
+                          controller: _ctl,
+                          enabled: !_applying,
+                          maxLines: null,
+                          expands: true,
+                          textAlignVertical: TextAlignVertical.top,
+                          textCapitalization: TextCapitalization.sentences,
+                          style: Theme.of(context).textTheme.bodyLarge,
+                          decoration: const InputDecoration(
+                            border: InputBorder.none,
+                            enabledBorder: InputBorder.none,
+                            focusedBorder: InputBorder.none,
+                            hintText: 'Write or dictate.',
+                          ),
+                        ),
+                      ),
+                    ),
+                    if (session?.failed == true)
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+                        child: Column(
+                          children: [
+                            Text(session!.error ?? 'Transcription failed.'),
+                            Wrap(
+                              spacing: 8,
+                              children: [
+                                TextButton(
+                                  onPressed: () =>
+                                      _action(() => speech.retry()),
+                                  child: const Text('Retry'),
+                                ),
+                                if (session.engine != 'local')
+                                  TextButton(
+                                    onPressed: () => _action(
+                                      () => speech.retry(local: true),
+                                    ),
+                                    child: const Text('Use local'),
+                                  ),
+                                TextButton(
+                                  onPressed: () => _action(speech.discard),
+                                  child: const Text('Discard'),
+                                ),
+                              ],
+                            ),
+                          ],
+                        ),
+                      ),
+                    if (_deliveryError != null)
+                      TextButton(
+                        onPressed: _applyTranscript,
+                        child: Text('$_deliveryError Try again.'),
+                      ),
+                    Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        alignment: WrapAlignment.center,
+                        children: [
+                          FilledButton.icon(
+                            onPressed:
+                                busy ||
+                                    session?.failed == true ||
+                                    session?.completed == true
+                                ? null
+                                : _toggleDictation,
+                            style: speech.listening
+                                ? FilledButton.styleFrom(
+                                    backgroundColor: VfTokens.lime,
+                                    foregroundColor: VfTokens.onBlock,
+                                  )
+                                : null,
+                            icon: Icon(
+                              speech.listening
+                                  ? PhosphorIconsRegular.stop
+                                  : PhosphorIconsRegular.microphone,
+                              size: 20,
+                            ),
+                            label: Text(
+                              _applying
+                                  ? 'Saving...'
+                                  : speech.transcribing
+                                  ? 'Transcribing...'
+                                  : _starting
+                                  ? 'Starting...'
+                                  : speech.listening
+                                  ? 'Stop recording'
+                                  : 'Dictate',
+                            ),
+                          ),
+                          if (speech.transcribing || speech.listening)
+                            TextButton(
+                              onPressed: () => _action(speech.discard),
+                              child: const Text('Discard'),
+                            ),
+                        ],
+                      ),
+                    ),
+                  ],
                 ),
               ),
-            ),
-          ),
-          SafeArea(
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: FilledButton.icon(
-                style: active
-                    ? FilledButton.styleFrom(
-                        backgroundColor:
-                            transcribing ? VfTokens.lilac : VfTokens.lime,
-                        foregroundColor: VfTokens.onBlock,
-                      )
-                    : null,
-                // Ignore taps while transcribing (Whisper is finishing).
-                onPressed: transcribing ? null : _toggleDictation,
-                icon: Icon(
-                  listening
-                      ? PhosphorIconsRegular.waveform
-                      : PhosphorIconsRegular.microphone,
-                  size: 20,
-                ),
-                label: Text(transcribing
-                    ? 'Transcribing…'
-                    : listening
-                        ? 'Listening — tap to stop'
-                        : 'Dictate'),
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _MicDeniedCard extends StatelessWidget {
-  const _MicDeniedCard();
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-      child: VfBlockCard(
-        color: VfTokens.coral,
-        padding: const EdgeInsets.all(16),
-        child: Row(
-          children: [
-            Expanded(
-              child: Text('noteit! needs the microphone to dictate.',
-                  style: Theme.of(context)
-                      .textTheme
-                      .bodyMedium
-                      ?.copyWith(color: VfTokens.onBlock)),
-            ),
-            FilledButton(
-              style: FilledButton.styleFrom(
-                backgroundColor: VfTokens.onBlock,
-                foregroundColor: Colors.white,
-              ),
-              onPressed: openAppSettings,
-              child: const Text('Grant'),
-            ),
-          ],
+            );
+          },
         ),
       ),
     );
   }
 }
-

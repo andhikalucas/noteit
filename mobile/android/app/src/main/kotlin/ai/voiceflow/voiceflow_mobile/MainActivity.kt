@@ -6,143 +6,118 @@ import android.net.Uri
 import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
+import android.view.WindowManager
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
+import org.json.JSONObject
+import java.io.File
 import kotlin.concurrent.thread
 
 class MainActivity : FlutterActivity() {
-
     private lateinit var channel: MethodChannel
+    private lateinit var coordinator: DictationCoordinator
     private val main = Handler(Looper.getMainLooper())
-    private val capture = AudioCapture() // in-app notes Whisper recording
+    private val listener: (Map<String, Any?>) -> Unit = { channel.invokeMethod("onSession", it) }
+
+    override fun onStart() {
+        super.onStart()
+        if (BuildConfig.DEBUG && BuildConfig.BENCHMARK_BUILD) LocalBenchmark.onForegroundStarted()
+    }
+
+    override fun onStop() {
+        if (BuildConfig.DEBUG && BuildConfig.BENCHMARK_BUILD) LocalBenchmark.onForegroundStopped()
+        super.onStop()
+    }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
-
-        // Preload the whisper context so the first in-app dictation is instant.
-        run {
-            val prefs = getSharedPreferences(OverlayService.PREFS, Context.MODE_PRIVATE)
-            if (prefs.getString(OverlayService.KEY_ENGINE, "whisper") == "whisper") {
-                val size = prefs.getString(OverlayService.KEY_MODEL, "small").orEmpty()
-                thread { WhisperEngine.warmUp(this, size) }
-            }
+        // Automated replay must stay visible between runs. Scope this to the
+        // isolated debug app; never change the owner's system sleep settings.
+        if (BuildConfig.DEBUG && BuildConfig.BENCHMARK_BUILD) {
+            window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         }
-
+        coordinator = DictationCoordinator.get(this)
         channel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "voiceflow/overlay")
+        coordinator.addListener(listener)
         channel.setMethodCallHandler { call, result ->
-            when (call.method) {
-                "hasOverlayPermission" ->
-                    result.success(Settings.canDrawOverlays(this))
-
-                "isAccessibilityEnabled" ->
-                    result.success(isAccessibilityEnabled())
-
-                "openOverlaySettings" -> {
-                    startActivity(
-                        Intent(
-                            Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                            Uri.parse("package:$packageName")
-                        )
-                    )
-                    result.success(null)
-                }
-
-                "openAccessibilitySettings" -> {
-                    startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
-                    result.success(null)
-                }
-
-                "setBubbleEnabled" -> {
-                    val enabled = call.argument<Boolean>("enabled") ?: false
-                    savePref(OverlayService.KEY_LOCALE, call.argument<String>("locale") ?: "id-ID")
-                    val svc = Intent(this, OverlayService::class.java)
-                    if (enabled) {
-                        svc.action = OverlayService.ACTION_START
-                        startForegroundService(svc)
-                    } else {
-                        stopService(svc)
+            try {
+                when (call.method) {
+                    "hasOverlayPermission" -> result.success(Settings.canDrawOverlays(this))
+                    "isAccessibilityEnabled" -> result.success(isAccessibilityEnabled())
+                    "isBubbleRunning" -> result.success(OverlayService.running)
+                    "openOverlaySettings" -> {
+                        startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")))
+                        result.success(null)
                     }
-                    result.success(null)
-                }
-
-                "setLocale" ->
-                    ok(result) { savePref(OverlayService.KEY_LOCALE, call.argument<String>("locale") ?: "id-ID") }
-
-                // ----- Engine selection (shared with the bubble via prefs) -----
-
-                "setEngine" ->
-                    ok(result) { savePref(OverlayService.KEY_ENGINE, call.argument<String>("engine") ?: "whisper") }
-
-                "setWhisperModel" ->
-                    ok(result) { savePref(OverlayService.KEY_MODEL, call.argument<String>("model") ?: "small") }
-
-                "whisperAvailable" ->
-                    result.success(WhisperNative.available)
-
-                "whisperModelDownloaded" ->
-                    result.success(ModelStore.isDownloaded(this, call.argument<String>("model") ?: "small"))
-
-                "downloadWhisperModel" -> {
-                    val size = call.argument<String>("model") ?: "small"
-                    thread {
+                    "openAccessibilitySettings" -> {
+                        startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)); result.success(null)
+                    }
+                    "setBubbleEnabled" -> {
+                        val enabled = call.argument<Boolean>("enabled") ?: false
+                        if (enabled) {
+                            if (!Settings.canDrawOverlays(this)) throw DictationException("permission", "Allow display over other apps first.")
+                            val service = Intent(this, OverlayService::class.java).setAction(OverlayService.ACTION_START)
+                            if (android.os.Build.VERSION.SDK_INT >= 26) startForegroundService(service) else startService(service)
+                        } else stopService(Intent(this, OverlayService::class.java))
+                        result.success(null)
+                    }
+                    "syncSettings" -> {
+                        DictationSettings.save(this, call.arguments as? Map<*, *> ?: emptyMap<Any, Any>())
+                        result.success(null)
+                    }
+                    "geminiConfigured" -> result.success(BuildConfig.GEMINI_API_KEY.isNotBlank())
+                    "localModelStatus" -> result.success(mapOf("downloaded" to ModelStore.isDownloaded(this, "small"),
+                        "label" to "Local model", "approxMb" to 181, "available" to WhisperEngine.available))
+                    "downloadLocalModel" -> thread {
                         try {
-                            ModelStore.ensure(this, size) { p ->
+                            ModelStore.ensure(this, "small") { p ->
                                 main.post { channel.invokeMethod("onWhisperProgress", p) }
                             }
-                            WhisperEngine.warmUp(this, size) // first dictation is instant
-                            main.post { result.success(true) }
-                        } catch (e: Exception) {
-                            main.post { result.error("download_failed", e.message, null) }
+                            WhisperEngine.warmUp(applicationContext, "small")
+                            main.post { result.success(null) }
+                        } catch (e: Exception) { main.post { result.error("download", "Model download failed. Try again.", null) } }
+                    }
+                    "startSession" -> result.success(coordinator.start(call.argument<String>("source") ?: ""))
+                    "stopSession" -> { coordinator.stop(call.argument<String>("id") ?: ""); result.success(null) }
+                    "retrySession" -> { coordinator.retry(call.argument<String>("id") ?: "", call.argument<String>("engine")); result.success(null) }
+                    "discardSession" -> { coordinator.discard(call.argument<String>("id") ?: ""); result.success(null) }
+                    "acknowledgeSession" -> { coordinator.acknowledge(call.argument<String>("id") ?: ""); result.success(null) }
+                    "pendingSessions" -> result.success(coordinator.pending(call.argument<String>("source")))
+                    "runLocalBenchmark" -> {
+                        if (!BuildConfig.DEBUG || !BuildConfig.APPLICATION_ID.endsWith(".benchmark"))
+                            throw DictationException("disabled", "Use the separate benchmark app for replay tests.")
+                        val file = File(call.argument<String>("path") ?: "").canonicalFile
+                        val root = filesDir.canonicalPath + File.separator
+                        if (!file.path.startsWith(root) || !file.isFile) throw DictationException("file", "Choose a WAV file in app storage.")
+                        val config = JSONObject(call.argument<Map<String, Any?>>("config") ?: emptyMap<String, Any?>())
+                        coordinator.beginBenchmark()
+                        thread {
+                            try {
+                                val data = LocalBenchmark.run(applicationContext, file, config)
+                                main.post { result.success(data.toString()) }
+                            } catch (e: Exception) { main.post { result.error("benchmark", e.message, null) } }
+                            finally { coordinator.endBenchmark() }
                         }
                     }
+                    else -> result.notImplemented()
                 }
-
-                // ----- In-app notes Whisper (record natively → transcribe) -----
-
-                "whisperStartRecording" -> {
-                    try {
-                        capture.start()
-                        result.success(true)
-                    } catch (e: Exception) {
-                        result.error("audio_failed", e.message, null)
-                    }
-                }
-
-                "whisperStopAndTranscribe" -> {
-                    val lang = call.argument<String>("lang")
-                    val prompt = call.argument<String>("prompt")
-                    val size = call.argument<String>("model") ?: "small"
-                    val samples = capture.stop()
-                    thread {
-                        val text = try {
-                            WhisperEngine.transcribe(this, size, samples, lang, prompt)
-                        } catch (e: Exception) {
-                            null
-                        }
-                        main.post { result.success(text) }
-                    }
-                }
-
-                else -> result.notImplemented()
+            } catch (e: Exception) {
+                result.error((e as? DictationException)?.code ?: "native",
+                    (e as? DictationException)?.message ?: "Could not complete the action.", null)
             }
         }
     }
 
-    private inline fun ok(result: MethodChannel.Result, body: () -> Unit) {
-        body(); result.success(null)
-    }
-
-    private fun savePref(key: String, value: String) {
-        getSharedPreferences(OverlayService.PREFS, Context.MODE_PRIVATE)
-            .edit().putString(key, value).apply()
+    override fun cleanUpFlutterEngine(flutterEngine: FlutterEngine) {
+        if (::coordinator.isInitialized) coordinator.removeListener(listener)
+        if (::channel.isInitialized) channel.setMethodCallHandler(null)
+        super.cleanUpFlutterEngine(flutterEngine)
     }
 
     private fun isAccessibilityEnabled(): Boolean {
         val expected = "$packageName/${InsertionService::class.java.name}"
-        val enabled = Settings.Secure.getString(
-            contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
-        ) ?: return false
+        val enabled = Settings.Secure.getString(contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES) ?: return false
         return enabled.split(':').any { it.equals(expected, ignoreCase = true) }
     }
 }

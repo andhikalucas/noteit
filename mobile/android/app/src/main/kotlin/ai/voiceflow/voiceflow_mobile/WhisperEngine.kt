@@ -2,6 +2,19 @@ package ai.voiceflow.voiceflow_mobile
 
 import android.content.Context
 import java.io.File
+import android.os.SystemClock
+
+data class LocalRecognitionConfig(
+    val model: String = "small",
+    val threads: Int = 4,
+    val scaledContext: Boolean = true,
+    val language: String = "auto",
+    val useGpu: Boolean = false,
+) {
+    init { require(threads in 1..8) }
+}
+
+data class LocalRecognitionResult(val text: String, val loadMs: Long, val inferenceMs: Long)
 
 /**
  * High-level on-device Whisper transcription over [WhisperNative]. Loads a
@@ -13,6 +26,9 @@ object WhisperEngine {
     private val lock = Any()
     private var ctxPtr: Long = 0
     private var loadedPath: String? = null
+    private var loadedBytes: Long = 0
+    private var loadedModified: Long = 0
+    private var loadedGpu: Boolean = false
 
     val available: Boolean get() = WhisperNative.available
 
@@ -27,14 +43,19 @@ object WhisperEngine {
 
     /**
      * Preloads the whisper context so the first utterance doesn't pay the
-     * model-load cost (~2-4 s from flash). Safe to call from any thread; no-op
+     * model-load cost. Call on a background worker; no-op
      * when unavailable or already loaded.
      */
-    fun warmUp(context: Context, size: String) {
+    fun warmUp(context: Context, size: String, useGpu: Boolean = false) {
         if (!WhisperNative.available) return
         val model = ModelStore.modelFile(context, size)
         if (!model.exists()) return
-        synchronized(lock) { ensureLoaded(model) }
+        synchronized(lock) {
+            // Warm-up is opportunistic. Actual dictation surfaces a verification failure.
+            val verified = try { ModelStore.requireVerified(context, size) }
+                catch (_: Exception) { return }
+            ensureLoaded(verified, useGpu)
+        }
     }
 
     /**
@@ -83,26 +104,53 @@ object WhisperEngine {
         val model = ModelStore.modelFile(context, size)
         if (!model.exists()) return null
 
-        val trimmed = trimSilence(samples)
+        return recognize(context, trimSilence(samples),
+            LocalRecognitionConfig(size, threads(), language = lang ?: "auto"), prompt,
+        )?.text
+    }
+
+    /** No trimming here: sample positions must remain stable for overlap. */
+    fun recognize(
+        context: Context,
+        samples: FloatArray,
+        config: LocalRecognitionConfig,
+        prompt: String?,
+        dropLeadingMs: Int = 0,
+        cancelled: () -> Boolean = { false },
+    ): LocalRecognitionResult? {
+        if (!WhisperNative.available || cancelled()) return null
+        val model = ModelStore.modelFile(context, config.model)
+        if (!model.exists()) return null
         synchronized(lock) {
-            if (!ensureLoaded(model)) return null
-            val text = WhisperNative.fullTranscribe(ctxPtr, threads(), trimmed, lang, prompt)
-            return text?.trim()
+            if (cancelled()) return null
+            val start = SystemClock.elapsedRealtime()
+            val verified = ModelStore.requireVerified(context, config.model)
+            if (cancelled() || !ensureLoaded(verified, config.useGpu)) return null
+            val loaded = SystemClock.elapsedRealtime()
+            val text = WhisperNative.fullTranscribe(
+                ctxPtr, config.threads, samples, config.language, prompt,
+                config.scaledContext, dropLeadingMs, WhisperCancellation(cancelled),
+            ) ?: return null
+            return LocalRecognitionResult(text.trim(), loaded - start, SystemClock.elapsedRealtime() - loaded)
         }
     }
 
-    private fun ensureLoaded(model: File): Boolean {
+    private fun ensureLoaded(model: File, useGpu: Boolean = false): Boolean {
         val path = model.absolutePath
-        if (ctxPtr != 0L && loadedPath == path) return true
+        if (ctxPtr != 0L && loadedPath == path && loadedGpu == useGpu &&
+            loadedBytes == model.length() && loadedModified == model.lastModified()) return true
         if (ctxPtr != 0L) {
             WhisperNative.freeContext(ctxPtr)
             ctxPtr = 0
             loadedPath = null
         }
-        val ptr = WhisperNative.initContext(path)
+        val ptr = WhisperNative.initContext(path, useGpu)
         if (ptr == 0L) return false
         ctxPtr = ptr
         loadedPath = path
+        loadedBytes = model.length()
+        loadedModified = model.lastModified()
+        loadedGpu = useGpu
         return true
     }
 

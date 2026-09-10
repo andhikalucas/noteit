@@ -47,14 +47,18 @@ class NotesProvider extends ChangeNotifier {
   Future<Note> create({String title = '', String body = ''}) async {
     final now = DateTime.now();
     final note = await repo.insert(
-        Note(title: title, body: body, createdAt: now, updatedAt: now));
+      Note(title: title, body: body, createdAt: now, updatedAt: now),
+    );
     await refresh();
     return note;
   }
 
   Future<Note> save(Note note, {String? title, String? body}) async {
-    final updated =
-        note.copyWith(title: title, body: body, updatedAt: DateTime.now());
+    final updated = note.copyWith(
+      title: title,
+      body: body,
+      updatedAt: DateTime.now(),
+    );
     await repo.update(updated);
     await refresh();
     return updated;
@@ -64,6 +68,16 @@ class NotesProvider extends ChangeNotifier {
     _lastDeleted = note;
     await repo.delete(note.id!);
     await refresh();
+  }
+
+  Future<Note?> appendTranscript(
+    int noteId,
+    String sessionId,
+    String text,
+  ) async {
+    final note = await repo.appendTranscript(noteId, sessionId, text);
+    await refresh();
+    return note;
   }
 
   /// Restores the most recently deleted note (undo snackbar).
