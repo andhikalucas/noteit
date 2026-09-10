@@ -81,15 +81,21 @@ JNIEXPORT jstring JNICALL
 Java_ai_voiceflow_voiceflow_1mobile_WhisperNative_fullTranscribe(
         JNIEnv *env, jobject thiz, jlong ptr, jint threads,
         jfloatArray audio, jstring lang, jstring prompt,
-        jboolean scaled_context, jint drop_leading_ms, jobject cancellation) {
+        jboolean scaled_context, jint drop_leading_ms, jobject cancellation, jint beam_size) {
     struct whisper_context *ctx = (struct whisper_context *)(intptr_t) ptr;
     if (ctx == NULL) return NULL;
+    if (beam_size < 1 || beam_size > 5) {
+        LOGE("Invalid beam size: expected 1 through 5");
+        return NULL;
+    }
 
     jfloat *samples = (*env)->GetFloatArrayElements(env, audio, NULL);
     if (samples == NULL) return NULL;
     jsize n = (*env)->GetArrayLength(env, audio);
 
-    struct whisper_full_params params = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
+    struct whisper_full_params params = whisper_full_default_params(
+        beam_size == 1 ? WHISPER_SAMPLING_GREEDY : WHISPER_SAMPLING_BEAM_SEARCH);
+    if (beam_size > 1) params.beam_search.beam_size = beam_size;
     params.print_realtime   = false;
     params.print_progress   = false;
     params.print_timestamps = false;

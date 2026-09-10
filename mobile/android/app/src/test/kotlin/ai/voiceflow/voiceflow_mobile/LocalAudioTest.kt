@@ -43,6 +43,61 @@ class LocalAudioTest {
         assertEquals(1, chunks.size)
     }
 
+    @Test fun `thirty second candidate keeps 29 point 999 seconds in one final chunk`() {
+        val chunks = mutableListOf<AudioChunk>()
+        val chunker = LocalChunker(
+            LocalPipelineConfig(minimumChunkMs = 30_000, maximumChunkMs = 30_000), chunks::add,
+        )
+        val samples = 479_984 // 29.999 seconds at 16 kHz.
+        chunker.accept(ShortArray(samples) { 500 })
+        assertTrue(chunks.isEmpty())
+        chunker.finish()
+        assertEquals(listOf(AudioChunk(0, samples.toLong(), 0, true)), chunks)
+        assertThirtySecondCandidateCoverage(chunks, samples.toLong())
+    }
+
+    @Test fun `thirty second candidate emits exactly once when stopped on boundary`() {
+        val chunks = mutableListOf<AudioChunk>()
+        val chunker = LocalChunker(
+            LocalPipelineConfig(minimumChunkMs = 30_000, maximumChunkMs = 30_000), chunks::add,
+        )
+        chunker.accept(ShortArray(480_000) { 500 })
+        assertEquals(listOf(AudioChunk(0, 480_000, 0, true)), chunks)
+        chunker.finish()
+        assertEquals(1, chunks.size) // No empty tail or overlap-only replay.
+        assertThirtySecondCandidateCoverage(chunks, 480_000)
+    }
+
+    @Test fun `thirty second candidate preserves one fresh repeated speech sample after boundary`() {
+        val chunks = mutableListOf<AudioChunk>()
+        val chunker = LocalChunker(
+            LocalPipelineConfig(minimumChunkMs = 30_000, maximumChunkMs = 30_000), chunks::add,
+        )
+        // Identical speech-level samples continue through the boundary. The
+        // fresh sample remains eligible even though its partial frame is 1/320.
+        chunker.accept(ShortArray(480_000) { 500 })
+        chunker.accept(shortArrayOf(500))
+        assertEquals(1, chunks.size)
+        chunker.finish()
+        assertEquals(listOf(
+            AudioChunk(0, 480_000, 0, true),
+            AudioChunk(473_600, 480_001, 400, true),
+        ), chunks)
+        assertThirtySecondCandidateCoverage(chunks, 480_001)
+    }
+
+    private fun assertThirtySecondCandidateCoverage(chunks: List<AudioChunk>, sampleCount: Long) {
+        assertEquals(0L, chunks.first().startSample)
+        assertEquals(sampleCount, chunks.last().endSample)
+        assertTrue(chunks.all { it.hasSpeech && it.endSample > it.startSample })
+        assertTrue(chunks.all { it.endSample - it.startSample <= 480_000 })
+        chunks.zipWithNext().forEach { (previous, next) ->
+            assertEquals(previous.endSample - next.leadingOverlapMs * 16L, next.startSample)
+        }
+        val freshSamples = chunks.sumOf { it.endSample - it.startSample - it.leadingOverlapMs * 16L }
+        assertEquals(sampleCount, freshSamples)
+    }
+
     @Test fun `input block boundaries do not affect chunks`() {
         fun chunks(blockSize: Int): List<AudioChunk> {
             val result = mutableListOf<AudioChunk>()

@@ -10,8 +10,22 @@ data class LocalRecognitionConfig(
     val scaledContext: Boolean = true,
     val language: String = "auto",
     val useGpu: Boolean = false,
+    val beamSize: Int = 1,
+    // Set only by the isolated benchmark. Null preserves the normal vocabulary
+    // prompt; an empty override explicitly tests decoding without a prompt.
+    val benchmarkPromptOverride: String? = null,
 ) {
-    init { require(threads in 1..8) }
+    init {
+        require(threads in 1..8)
+        require(beamSize in 1..5) { "Beam size must be between 1 and 5." }
+        require(benchmarkPromptOverride == null ||
+            (benchmarkPromptOverride.length <= 512 && '\u0000' !in benchmarkPromptOverride)) {
+            "The benchmark recognition prompt must contain at most 512 characters and no null characters."
+        }
+    }
+
+    fun decodingPrompt(vocabularyPrompt: String?): String? =
+        benchmarkPromptOverride ?: vocabularyPrompt
 }
 
 data class LocalRecognitionResult(val text: String, val loadMs: Long, val inferenceMs: Long)
@@ -128,8 +142,9 @@ object WhisperEngine {
             if (cancelled() || !ensureLoaded(verified, config.useGpu)) return null
             val loaded = SystemClock.elapsedRealtime()
             val text = WhisperNative.fullTranscribe(
-                ctxPtr, config.threads, samples, config.language, prompt,
+                ctxPtr, config.threads, samples, config.language, config.decodingPrompt(prompt),
                 config.scaledContext, dropLeadingMs, WhisperCancellation(cancelled),
+                config.beamSize,
             ) ?: return null
             return LocalRecognitionResult(text.trim(), loaded - start, SystemClock.elapsedRealtime() - loaded)
         }

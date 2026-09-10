@@ -33,6 +33,33 @@ val qwenBenchmark = benchmarkBuild && providers.gradleProperty("dart-defines").o
         runCatching { String(Base64.getDecoder().decode(encoded), Charsets.UTF_8) }
             .getOrNull() == "NOTEIT_QWEN_BENCHMARK=true"
     }
+val punctuationBenchmark = benchmarkBuild && providers.gradleProperty("dart-defines").orNull.orEmpty()
+    .split(',').filter { it.isNotBlank() }.any { encoded ->
+        runCatching { String(Base64.getDecoder().decode(encoded), Charsets.UTF_8) }
+            .getOrNull() == "NOTEIT_PUNCTUATION_BENCHMARK=true"
+    }
+// Both experimental AARs contain ONNX native libraries. Never combine them.
+val readableModelDefines = providers.gradleProperty("dart-defines").orNull.orEmpty()
+    .split(',').filter { it.isNotBlank() }.mapNotNull { encoded ->
+        runCatching { String(Base64.getDecoder().decode(encoded), Charsets.UTF_8) }.getOrNull()
+    }.filter { it.startsWith("NOTEIT_LOCAL_READABLE_MODEL=") }
+check(readableModelDefines.size <= 1) { "Specify one readable local candidate." }
+val readableModel = readableModelDefines.singleOrNull()?.substringAfter('=') ?: ""
+check(readableModel.isEmpty() || (punctuationBenchmark && readableModel in setOf("small-q8", "medium-q8"))) {
+    "Readable local candidates require the isolated punctuation benchmark and an existing Q8 candidate."
+}
+check(!(qwenBenchmark && punctuationBenchmark)) { "Build one optional ONNX benchmark at a time." }
+val punctuationAar = rootProject.file("../build/benchmarks/punctuation-android/onnxruntime-android-1.29.0.aar")
+if (punctuationBenchmark) {
+    check(punctuationAar.isFile && punctuationAar.length() == 51897836L) { "Prepare the pinned punctuation benchmark AAR first." }
+    val digest = MessageDigest.getInstance("SHA-256")
+    punctuationAar.inputStream().use { input ->
+        val buffer = ByteArray(65536)
+        while (true) { val n = input.read(buffer); if (n < 0) break; digest.update(buffer, 0, n) }
+    }
+    check(digest.digest().joinToString("") { "%02x".format(it) } ==
+        "e97540ca78fe36f6fe2013f82843414fb843b6c7681fb04644cba5e1406662dd") { "Punctuation benchmark AAR checksum mismatch." }
+}
 val qwenAar = rootProject.file("../build/benchmarks/qwen-android/sherpa-onnx-1.13.7.aar")
 if (qwenBenchmark) {
     check(qwenAar.isFile && qwenAar.length() == 49113869L) { "Prepare the pinned Qwen benchmark AAR first." }
@@ -51,6 +78,10 @@ android {
     ndkVersion = flutter.ndkVersion
     buildFeatures { buildConfig = true }
     if (qwenBenchmark) sourceSets.getByName("main").java.srcDir("src/qwenBenchmark/kotlin")
+    if (punctuationBenchmark) {
+        sourceSets.getByName("main").java.srcDir("src/punctuationBenchmark/kotlin")
+        sourceSets.getByName("test").java.srcDir("src/punctuationBenchmarkTest/kotlin")
+    }
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
@@ -78,14 +109,25 @@ android {
         buildConfigField("String", "GEMINI_API_KEY", if (benchmarkBuild) "\"\"" else quotedGeminiApiKey)
         buildConfigField("boolean", "BENCHMARK_BUILD", benchmarkBuild.toString())
         buildConfigField("boolean", "QWEN_BENCHMARK", qwenBenchmark.toString())
+        buildConfigField("boolean", "PUNCTUATION_BENCHMARK", punctuationBenchmark.toString())
+        buildConfigField("String", "LOCAL_READABLE_MODEL", "\"$readableModel\"")
 
         externalNativeBuild {
             cmake {
                 arguments += listOf("-DANDROID_STL=c++_shared")
+                // Always pass OFF for ordinary builds so a cached experimental
+                // CMake configuration cannot package the tokenizer accidentally.
+                arguments += "-DNOTEIT_PUNCTUATION_BENCHMARK=${if (punctuationBenchmark) "ON" else "OFF"}"
+                // AGP otherwise explicitly builds discovered upstream CLI targets,
+                // including SentencePiece training tools excluded from CMake ALL.
+                // JNI dependencies pull in Whisper, ggml and the cleanup DSO.
+                targets += "noteit_whisper"
+                if (punctuationBenchmark) targets += "noteit_sentencepiece"
             }
         }
-        // arm64 for real devices (Whisper is validated there); x86_64 for the emulator.
+        // Samsung A55 and the ARM64 emulator used by this personal project.
         ndk {
+            abiFilters.clear()
             abiFilters += listOf("arm64-v8a")
         }
     }
@@ -120,6 +162,7 @@ flutter {
 
 dependencies {
     if (qwenBenchmark) implementation(files(qwenAar))
+    if (punctuationBenchmark) implementation(files(punctuationAar))
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20240303")
 }

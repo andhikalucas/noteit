@@ -22,14 +22,39 @@ data class LocalPipelineConfig(
     val cleanupBudgetMs: Long = 10_000,
     val cleanupThreads: Int = 4,
     val silenceThresholdRms: Int = 64,
+    val benchmarkPauseOnly: Boolean = false,
+    val benchmarkNormalPriority: Boolean = false,
+    val readableCandidate: Boolean = false,
 ) {
     init {
         require(minimumChunkMs in 500..30_000)
-        require(maximumChunkMs in minimumChunkMs..30_000)
+        require(maximumChunkMs in minimumChunkMs..(if (benchmarkPauseOnly) BENCHMARK_MAXIMUM_MS else 30_000))
         require(silenceMs in 100..2_000)
         require(overlapMs in 0..1_000 && overlapMs < minimumChunkMs)
         require(cleanupContextSentences in 1..8 && cleanupBudgetMs in 500..120_000 && cleanupThreads in 1..8)
         require(silenceThresholdRms in 64..2_048)
+        require(!benchmarkPauseOnly || (maximumChunkMs == BENCHMARK_MAXIMUM_MS && overlapMs == 0)) {
+            "Pause-only benchmarks require the ten-minute session bound and zero overlap."
+        }
+    }
+
+    internal val workerJavaPriority: Int
+        get() = if (benchmarkNormalPriority) Thread.NORM_PRIORITY else Thread.NORM_PRIORITY - 1
+
+    internal fun requireAllowedRuntime(debug: Boolean, isolatedBenchmark: Boolean) {
+        check(!benchmarkPauseOnly || (debug && isolatedBenchmark)) {
+            "Pause-only scheduling is available only in isolated development benchmarks."
+        }
+        check(!benchmarkNormalPriority || (debug && isolatedBenchmark)) {
+            "Normal worker priority is available only in isolated development benchmarks."
+        }
+        check(!readableCandidate || (debug && isolatedBenchmark)) {
+            "Readable local transcription is an isolated development candidate."
+        }
+    }
+
+    companion object {
+        const val BENCHMARK_MAXIMUM_MS = 600_000
     }
 }
 
@@ -39,6 +64,9 @@ data class AudioChunk(val startSample: Long, val endSample: Long, val leadingOve
  * Lightweight 20 ms energy boundary detector, not a semantic/word detector.
  * Low energy is used to FIND boundaries; it never trims a recognized phrase.
  * Only segments with no frame above the quiet-speech floor are skipped.
+ * The benchmark-only pause policy never forces a duration boundary. Longer
+ * inputs use whisper_full's internal windows, not application token dropping;
+ * this avoids our forced-cut mechanism, not all recognition/alignment errors.
  */
 class LocalChunker(private val config: LocalPipelineConfig, private val emit: (AudioChunk) -> Unit) {
     private var position = 0L
@@ -49,8 +77,16 @@ class LocalChunker(private val config: LocalPipelineConfig, private val emit: (A
     private var quietFrames = 0
     private var hasSpeech = false
     private var freshSamples = 0L
+    private var terminalFailure: DictationException? = null
 
     fun accept(samples: ShortArray) {
+        terminalFailure?.let { throw it }
+        if (config.benchmarkPauseOnly &&
+            samples.size.toLong() > LocalPipelineConfig.BENCHMARK_MAXIMUM_MS * 16L - position) {
+            val error = DictationException("local_benchmark_limit", "Pause-only benchmarks support up to ten minutes of audio.")
+            terminalFailure = error
+            throw error
+        }
         for (sample in samples) {
             frameEnergy += sample.toDouble() * sample
             frameSamples++
@@ -69,13 +105,15 @@ class LocalChunker(private val config: LocalPipelineConfig, private val emit: (A
                 frameEnergy = 0.0
                 val lengthMs = (position - start) / 16
                 val atPause = lengthMs >= config.minimumChunkMs && quietFrames * 20 >= config.silenceMs
-                val forced = lengthMs >= config.maximumChunkMs
+                val forced = !config.benchmarkPauseOnly && lengthMs >= config.maximumChunkMs
                 if (atPause || forced) flush(forced && !atPause)
             }
         }
     }
 
     fun finish() {
+        // A caller cannot catch a limit failure and then obtain a partial result.
+        terminalFailure?.let { throw it }
         if (frameSamples > 0 && frameEnergy / frameSamples >= 64.0 * 64.0) hasSpeech = true
         if (freshSamples > 0) flush(false)
     }
@@ -99,13 +137,16 @@ data class LocalChunkMeasurement(
     val loadMs: Long,
     val inferenceMs: Long,
     val text: String,
+    val javaPriority: Int? = null,
+    val linuxNice: Int? = null,
+    val inputSampleCount: Int? = null,
 )
 
 data class LocalCleanupMeasurement(val startedMs: Long, val finishedMs: Long, val result: CleanupResult)
 
 class LocalTranscriber(
     context: Context,
-    private val config: LocalPipelineConfig = LocalPipelineConfig(),
+    private val config: LocalPipelineConfig = LocalCandidatePolicy.configuration(),
 ) : Transcriber {
     private val context = context.applicationContext
 
@@ -113,6 +154,8 @@ class LocalTranscriber(
         startMeasuredSession(options, cancelled)
 
     internal fun startMeasuredSession(options: DictationOptions, cancelled: () -> Boolean): PipelinedLocalSession {
+        config.requireAllowedRuntime(BuildConfig.DEBUG, BuildConfig.BENCHMARK_BUILD)
+        LocalCandidatePolicy.requireRuntime(context)
         if (!WhisperEngine.available) throw DictationException("local_unavailable", "Local engine unavailable.")
         if (!WhisperEngine.modelReady(context, config.recognition.model)) {
             throw DictationException("model_missing", "Download the local model in Settings.")
@@ -154,7 +197,7 @@ internal class PipelinedLocalSession(
     private val writer = RandomAccessFile(spool, "rw")
     private val executor = ThreadPoolExecutor(
         1, 1, 0, TimeUnit.MILLISECONDS, ArrayBlockingQueue<Runnable>(128),
-        { runnable -> Thread(runnable, "noteit-local").apply { priority = Thread.NORM_PRIORITY - 1 } },
+        { runnable -> Thread(runnable, "noteit-local").apply { priority = config.workerJavaPriority } },
     )
     private val jobs = mutableListOf<Future<*>>()
     private val transcript = StringBuilder()
@@ -173,6 +216,10 @@ internal class PipelinedLocalSession(
             if (!isCancelled()) {
                 val start = SystemClock.elapsedRealtime()
                 WhisperEngine.warmUp(context, config.recognition.model, config.recognition.useGpu)
+                if (config.readableCandidate && !isCancelled()) {
+                    // Finish retries failed preparation without discarding audio.
+                    runCatching { LocalCandidatePolicy.prepare(context) }
+                }
                 warmupMs = SystemClock.elapsedRealtime() - start
             }
         }
@@ -202,6 +249,12 @@ internal class PipelinedLocalSession(
                     if (isCancelled() || failure != null) return@submit
                     val start = SystemClock.elapsedRealtime()
                     val samples = readChunk(chunk)
+                    // Record the actual caller thread, not its requested priority or
+                    // an assumed Android Java-to-Linux mapping. Audio stays unchanged.
+                    val javaPriority = Thread.currentThread().priority
+                    val linuxNice = runCatching {
+                        android.os.Process.getThreadPriority(android.os.Process.myTid())
+                    }.getOrNull()
                     val result = WhisperEngine.recognize(
                         context, samples, config.recognition,
                         options.vocabulary.filter { it.isNotBlank() }.joinToString(", ").take(2_000).ifBlank { null },
@@ -217,7 +270,8 @@ internal class PipelinedLocalSession(
                     }
                     synchronized(measurements) {
                         measurements += LocalChunkMeasurement(chunk.startSample, chunk.endSample, queued, start,
-                            SystemClock.elapsedRealtime(), result.loadMs, result.inferenceMs, result.text)
+                            SystemClock.elapsedRealtime(), result.loadMs, result.inferenceMs, result.text,
+                            javaPriority = javaPriority, linuxNice = linuxNice, inputSampleCount = samples.size)
                     }
                     if (config.semanticCleanup && result.text.isNotBlank()) {
                         cleanupQueue.append(result.text)
@@ -231,7 +285,11 @@ internal class PipelinedLocalSession(
     }
 
     private fun readChunk(chunk: AudioChunk): FloatArray {
-        val count = (chunk.endSample - chunk.startSample).toInt()
+        val sampleCount = chunk.endSample - chunk.startSample
+        require(sampleCount in 1L..LocalPipelineConfig.BENCHMARK_MAXIMUM_MS * 16L) {
+            "Local audio chunk exceeds its bounded allocation."
+        }
+        val count = sampleCount.toInt()
         val bytes = ByteArray(count * 2)
         RandomAccessFile(spool, "r").use { it.seek(chunk.startSample * 2); it.readFully(bytes) }
         return FloatArray(count) { i ->
@@ -286,7 +344,8 @@ internal class PipelinedLocalSession(
             if (raw.isEmpty()) throw DictationException("no_speech", "No speech detected. Record again.")
             if (config.semanticCleanup) drainCleanup(prioritizeRecognition = false)
             // Coordinator owns the one and only autocorrect pass for both engines.
-            return TranscriptionResult(if (config.semanticCleanup) cleanupWindow.text() else raw, raw)
+            val result = TranscriptionResult(if (config.semanticCleanup) cleanupWindow.text() else raw, raw)
+            return if (config.readableCandidate) LocalCandidatePolicy.finish(context, result, ::isCancelled) else result
         } finally { dispose() }
     }
 

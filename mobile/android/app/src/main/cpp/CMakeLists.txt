@@ -83,3 +83,9 @@ add_dependencies(noteit_cleanup cleanup_runtime_build)
 # Make the imported runtime a packaged dependency even before a cleanup model
 # is downloaded. Loading the DSO itself does not load a model or allocate KV cache.
 target_link_libraries(noteit_whisper PRIVATE "-Wl,--no-as-needed" noteit_cleanup "-Wl,--as-needed")
+
+option(NOTEIT_PUNCTUATION_BENCHMARK "Build the isolated SentencePiece tokenizer benchmark" OFF)
+if(NOTEIT_PUNCTUATION_BENCHMARK)
+    add_subdirectory("${CMAKE_CURRENT_LIST_DIR}/../../punctuationBenchmark/cpp"
+                     "${CMAKE_CURRENT_BINARY_DIR}/punctuation-tokenizer")
+endif()

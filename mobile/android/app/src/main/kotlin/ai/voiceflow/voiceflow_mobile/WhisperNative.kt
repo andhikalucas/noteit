@@ -29,6 +29,7 @@ object WhisperNative {
     /**
      * Transcribes 16 kHz mono float samples. [lang] is a BCP-47-ish code
      * ("id", "en") or null/"auto" for detection; [prompt] biases decoding.
+     * [beamSize] 1 preserves greedy decoding; 2 through 5 select beam search.
      * Returns the concatenated text, or null on failure.
      */
     external fun fullTranscribe(
@@ -40,6 +41,7 @@ object WhisperNative {
         scaledContext: Boolean = true,
         dropLeadingMs: Int = 0,
         cancellation: WhisperCancellation = WhisperCancellation { false },
+        beamSize: Int = 1,
     ): String?
 }
 

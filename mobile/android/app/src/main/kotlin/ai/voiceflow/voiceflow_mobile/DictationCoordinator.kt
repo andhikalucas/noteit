@@ -175,7 +175,8 @@ class DictationCoordinator private constructor(context: Context) {
             throw DictationException("configuration", "Add the Gemini key and rebuild the app.")
         if (options.engine == "local") {
             if (!WhisperEngine.available) throw DictationException("unavailable", "Local transcription is unavailable.")
-            if (!ModelStore.isDownloaded(app, "small")) throw DictationException("model_missing", "Download the local model in Settings.")
+            LocalCandidatePolicy.requireRuntime(app)
+            if (!ModelStore.isDownloaded(app, LocalCandidatePolicy.model)) throw DictationException("model_missing", "Download the local model in Settings.")
         }
     }
 

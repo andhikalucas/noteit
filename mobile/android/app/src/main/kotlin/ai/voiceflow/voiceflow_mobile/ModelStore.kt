@@ -25,6 +25,8 @@ object ModelStore {
             "c577b9a86e7e048a0b7eada054f4dd79a56bbfa911fbdacf900ac5b567cbb7d9"),
         "small-q8" to Asset("ggml-small-q8_0.bin", 264464607,
             "49c8fb02b65e6049d5fa6c04f81f53b867b5ec9540406812c643f177317f779f"),
+        "medium-q8" to Asset("ggml-medium-q8_0.bin", 823369779,
+            "42a1ffcbe4167d224232443396968db4d02d4e8e87e213d3ee2e03095dea6502"),
     )
     private data class Stamp(val bytes: Long, val modified: Long, val valid: Boolean)
     private val verified = ConcurrentHashMap<String, Stamp>()

@@ -67,14 +67,16 @@ class MainActivity : FlutterActivity() {
                         result.success(null)
                     }
                     "geminiConfigured" -> result.success(BuildConfig.GEMINI_API_KEY.isNotBlank())
-                    "localModelStatus" -> result.success(mapOf("downloaded" to ModelStore.isDownloaded(this, "small"),
-                        "label" to "Local model", "approxMb" to 181, "available" to WhisperEngine.available))
+                    "localModelStatus" -> result.success(mapOf("downloaded" to ModelStore.isDownloaded(this, LocalCandidatePolicy.model),
+                        "label" to "Local model", "approxMb" to if (LocalCandidatePolicy.model == "medium-q8") 1851 else if (LocalCandidatePolicy.enabled) 1318 else 181,
+                        "available" to WhisperEngine.available))
                     "downloadLocalModel" -> thread {
                         try {
-                            ModelStore.ensure(this, "small") { p ->
+                            LocalCandidatePolicy.requireRuntime(this)
+                            ModelStore.ensure(this, LocalCandidatePolicy.model) { p ->
                                 main.post { channel.invokeMethod("onWhisperProgress", p) }
                             }
-                            WhisperEngine.warmUp(applicationContext, "small")
+                            WhisperEngine.warmUp(applicationContext, LocalCandidatePolicy.model)
                             main.post { result.success(null) }
                         } catch (e: Exception) { main.post { result.error("download", "Model download failed. Try again.", null) } }
                     }
