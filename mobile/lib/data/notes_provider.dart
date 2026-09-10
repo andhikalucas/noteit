@@ -12,6 +12,12 @@ class NotesProvider extends ChangeNotifier {
   NoteSort sort = NoteSort.updated;
   Note? _lastDeleted;
   bool _disposed = false;
+  int _refreshVersion = 0;
+  bool _undoing = false;
+  String? refreshError;
+  String? undoError;
+
+  bool get canRetryUndo => _lastDeleted != null && !_undoing;
 
   NotesProvider(this.repo);
 
@@ -29,7 +35,18 @@ class NotesProvider extends ChangeNotifier {
   }
 
   Future<void> refresh() async {
-    notes = await repo.all(query: query, sort: sort);
+    final version = ++_refreshVersion;
+    try {
+      final loaded = await repo.all(query: query, sort: sort);
+      if (version != _refreshVersion) return;
+      notes = loaded;
+      refreshError = null;
+    } catch (_) {
+      if (version != _refreshVersion) return;
+      // A failed list read must not turn an already committed write into a
+      // failed save. Keep the error visible and hide stale rows until retry.
+      refreshError = 'Could not load notes.';
+    }
     notifyListeners();
   }
 
@@ -65,8 +82,9 @@ class NotesProvider extends ChangeNotifier {
   }
 
   Future<void> delete(Note note) async {
-    _lastDeleted = note;
     await repo.delete(note.id!);
+    _lastDeleted = note;
+    undoError = null;
     await refresh();
   }
 
@@ -83,9 +101,30 @@ class NotesProvider extends ChangeNotifier {
   /// Restores the most recently deleted note (undo snackbar).
   Future<void> undoDelete() async {
     final n = _lastDeleted;
-    _lastDeleted = null;
-    if (n == null) return;
-    await repo.insert(n.copyWith(id: null));
-    await refresh();
+    if (n == null || _undoing) return;
+    _undoing = true;
+    undoError = null;
+    notifyListeners();
+    try {
+      // copyWith(id: null) retains the original ID; a restored note needs a
+      // new database-assigned ID rather than an explicit primary key.
+      await repo.insert(
+        Note(
+          title: n.title,
+          body: n.body,
+          createdAt: n.createdAt,
+          updatedAt: n.updatedAt,
+        ),
+      );
+      // Another deletion may have committed while this restore was pending.
+      if (identical(_lastDeleted, n)) _lastDeleted = null;
+      await refresh();
+    } catch (_) {
+      if (identical(_lastDeleted, n)) undoError = 'Could not restore note.';
+      rethrow;
+    } finally {
+      _undoing = false;
+      notifyListeners();
+    }
   }
 }

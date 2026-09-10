@@ -98,7 +98,9 @@ class _NotesListScreenState extends State<NotesListScreen> {
         top: false,
         child: LayoutBuilder(
           builder: (context, constraints) {
-            final minimumHeight = MediaQuery.textScalerOf(context).scale(160);
+            final minimumHeight = MediaQuery.textScalerOf(
+              context,
+            ).scale(provider.undoError == null ? 160 : 260);
             return SingleChildScrollView(
               child: SizedBox(
                 height: constraints.maxHeight < minimumHeight
@@ -132,8 +134,45 @@ class _NotesListScreenState extends State<NotesListScreen> {
                         ),
                       ),
                     ),
+                    if (provider.undoError != null)
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 16),
+                        child: Wrap(
+                          spacing: 12,
+                          crossAxisAlignment: WrapCrossAlignment.center,
+                          children: [
+                            Text(provider.undoError!),
+                            TextButton(
+                              onPressed: provider.canRetryUndo
+                                  ? () async {
+                                      try {
+                                        await provider.undoDelete();
+                                      } catch (_) {
+                                        // Keep the provider's retryable error.
+                                      }
+                                    }
+                                  : null,
+                              child: const Text('Retry Undo'),
+                            ),
+                          ],
+                        ),
+                      ),
                     Expanded(
-                      child: provider.notes.isEmpty
+                      child: provider.refreshError != null
+                          ? ListView(
+                              padding: const EdgeInsets.all(16),
+                              children: [
+                                Text(provider.refreshError!),
+                                Align(
+                                  alignment: Alignment.centerLeft,
+                                  child: TextButton(
+                                    onPressed: provider.refresh,
+                                    child: const Text('Retry'),
+                                  ),
+                                ),
+                              ],
+                            )
+                          : provider.notes.isEmpty
                           ? _EmptyState(searching: provider.query.isNotEmpty)
                           : CustomScrollView(
                               slivers: [

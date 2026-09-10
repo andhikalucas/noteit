@@ -16,9 +16,19 @@ class TerminologyScreen extends StatefulWidget {
 }
 
 class _TerminologyScreenState extends State<TerminologyScreen> {
+  final _messengerKey = GlobalKey<ScaffoldMessengerState>();
   bool _saving = false;
   bool _dialogOpen = false;
   bool get autocorrect => widget.autocorrect;
+
+  // Undo is valid only while this terminology route is mounted. Keep its
+  // notices off the app-wide queue and make the most recent action current.
+  void _showSnackBar(SnackBar snackBar) {
+    _messengerKey.currentState
+      ?..clearSnackBars()
+      ..removeCurrentSnackBar()
+      ..showSnackBar(snackBar);
+  }
 
   Future<bool> _save(
     BuildContext context,
@@ -33,7 +43,7 @@ class _TerminologyScreenState extends State<TerminologyScreen> {
       await update();
     } catch (_) {
       if (context.mounted && showFailure) {
-        ScaffoldMessenger.of(context).showSnackBar(
+        _showSnackBar(
           const SnackBar(content: Text('Could not save. Try again.')),
         );
       }
@@ -44,7 +54,7 @@ class _TerminologyScreenState extends State<TerminologyScreen> {
       await bridge.syncSettings(settings);
     } catch (_) {
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
+        _showSnackBar(
           const SnackBar(
             content: Text('Saved. Reopen the bubble to update its words.'),
           ),
@@ -124,7 +134,7 @@ class _TerminologyScreenState extends State<TerminologyScreen> {
           : settings.setVocabulary([...settings.vocabulary]..removeAt(index)),
     );
     if (!saved || !context.mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
+    _showSnackBar(
       SnackBar(
         content: Text(autocorrect ? 'Autocorrect removed' : 'Word removed'),
         action: SnackBarAction(
@@ -155,60 +165,65 @@ class _TerminologyScreenState extends State<TerminologyScreen> {
     final count = autocorrect
         ? settings.autocorrectRules.length
         : settings.vocabulary.length;
-    return Scaffold(
-      appBar: AppBar(
-        title: VfEyebrow(autocorrect ? 'Autocorrect' : 'Vocabulary'),
-      ),
-      body: SafeArea(
-        top: false,
-        child: ListView(
-          padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
-          children: [
-            Text(
-              autocorrect
-                  ? 'Replace a misheard word or phrase in future transcripts.'
-                  : 'Add names and terms with the spelling you want.',
-            ),
-            const SizedBox(height: 16),
-            Align(
-              alignment: Alignment.centerLeft,
-              child: FilledButton.icon(
-                onPressed: _saving || _dialogOpen ? null : () => _edit(context),
-                icon: const Icon(Icons.add),
-                label: Text(autocorrect ? 'Add autocorrect' : 'Add word'),
+    return ScaffoldMessenger(
+      key: _messengerKey,
+      child: Scaffold(
+        appBar: AppBar(
+          title: VfEyebrow(autocorrect ? 'Autocorrect' : 'Vocabulary'),
+        ),
+        body: SafeArea(
+          top: false,
+          child: ListView(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+            children: [
+              Text(
+                autocorrect
+                    ? 'Replace a misheard word or phrase in future transcripts.'
+                    : 'Add names and terms with the spelling you want.',
               ),
-            ),
-            const SizedBox(height: 12),
-            if (count == 0)
-              Padding(
-                padding: const EdgeInsets.symmetric(vertical: 24),
-                child: Text(
-                  autocorrect ? 'No autocorrections yet.' : 'No words yet.',
-                ),
-              ),
-            for (var i = 0; i < count; i++)
-              ListTile(
-                contentPadding: EdgeInsets.zero,
-                title: Text(
-                  autocorrect
-                      ? settings.autocorrectRules[i].from
-                      : settings.vocabulary[i],
-                ),
-                subtitle: autocorrect
-                    ? Text('Replace with: ${settings.autocorrectRules[i].to}')
-                    : null,
-                onTap: _saving || _dialogOpen
-                    ? null
-                    : () => _edit(context, index: i),
-                trailing: IconButton(
-                  tooltip: autocorrect ? 'Remove autocorrect' : 'Remove word',
-                  icon: const Icon(Icons.delete_outline),
+              const SizedBox(height: 16),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: FilledButton.icon(
                   onPressed: _saving || _dialogOpen
                       ? null
-                      : () => _delete(context, i),
+                      : () => _edit(context),
+                  icon: const Icon(Icons.add),
+                  label: Text(autocorrect ? 'Add autocorrect' : 'Add word'),
                 ),
               ),
-          ],
+              const SizedBox(height: 12),
+              if (count == 0)
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 24),
+                  child: Text(
+                    autocorrect ? 'No autocorrections yet.' : 'No words yet.',
+                  ),
+                ),
+              for (var i = 0; i < count; i++)
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: Text(
+                    autocorrect
+                        ? settings.autocorrectRules[i].from
+                        : settings.vocabulary[i],
+                  ),
+                  subtitle: autocorrect
+                      ? Text('Replace with: ${settings.autocorrectRules[i].to}')
+                      : null,
+                  onTap: _saving || _dialogOpen
+                      ? null
+                      : () => _edit(context, index: i),
+                  trailing: IconButton(
+                    tooltip: autocorrect ? 'Remove autocorrect' : 'Remove word',
+                    icon: const Icon(Icons.delete_outline),
+                    onPressed: _saving || _dialogOpen
+                        ? null
+                        : () => _delete(context, i),
+                  ),
+                ),
+            ],
+          ),
         ),
       ),
     );

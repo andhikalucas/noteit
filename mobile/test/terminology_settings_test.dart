@@ -316,4 +316,26 @@ void main() {
       'to': 'Tiara',
     });
   });
+
+  testWidgets('latest terminology deletion owns the visible Undo', (
+    tester,
+  ) async {
+    final settings = await load();
+    await settings.setVocabulary(['Tiara', 'Rabu']);
+    await tester.pumpWidget(
+      host(settings, _Bridge(), const TerminologyScreen()),
+    );
+    await tester.tap(find.byTooltip('Remove word').first);
+    await tester.pumpAndSettle();
+    expect(settings.vocabulary, ['Rabu']);
+    await tester.tap(find.byTooltip('Remove word'));
+    await tester.pumpAndSettle();
+    expect(settings.vocabulary, isEmpty);
+    await tester.tap(find.text('Undo'));
+    await tester.pumpAndSettle();
+    expect(settings.vocabulary, ['Rabu']);
+    await tester.pump(const Duration(seconds: 5));
+    await tester.pumpAndSettle();
+    expect(find.text('Undo'), findsNothing);
+  });
 }

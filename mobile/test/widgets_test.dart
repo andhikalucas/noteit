@@ -5,8 +5,24 @@ import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'package:voiceflow_mobile/data/notes_repository.dart';
 import 'package:voiceflow_mobile/main.dart';
 import 'package:voiceflow_mobile/models/note.dart';
+import 'package:voiceflow_mobile/models/autocorrect_rule.dart';
+import 'package:voiceflow_mobile/services/overlay_bridge.dart';
 import 'package:voiceflow_mobile/services/settings_service.dart';
 import 'package:voiceflow_mobile/theme/vf_theme.dart';
+
+class _ReadyBridge extends OverlayBridge {
+  @override
+  Future<void> syncSettings(SettingsService settings) async {}
+
+  @override
+  Future<Map<String, dynamic>> localModelStatus() async => {'downloaded': true};
+
+  @override
+  Future<bool> geminiConfigured() async => true;
+
+  @override
+  Future<bool> isBubbleRunning() async => false;
+}
 
 Future<VoiceFlowApp> buildApp(NotesRepository repo) async {
   SharedPreferences.setMockInitialValues({});
@@ -133,6 +149,99 @@ void main() {
     expect(find.text('ENGINE'), findsOneWidget);
     expect(find.text('Vocabulary'), findsOneWidget);
     expect(find.text('FLOATING BUBBLE'), findsOneWidget);
+  });
+
+  testWidgets('terminology Undo never follows navigation into note deletion', (
+    tester,
+  ) async {
+    await repo.insert(seed('Keep this note'));
+    SharedPreferences.setMockInitialValues({});
+    final settings = await SettingsService.load();
+    await settings.setVocabulary(['Tiara']);
+    await settings.setAutocorrectRules([
+      const AutocorrectRule(from: 'Teeara', to: 'Tiara'),
+    ]);
+    await tester.pumpWidget(
+      VoiceFlowApp(
+        settings: settings,
+        repository: repo,
+        bridge: _ReadyBridge(),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('Settings'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Vocabulary'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('Remove word'));
+    await tester.pumpAndSettle();
+    expect(find.text('Word removed'), findsOneWidget);
+    await tester.pageBack();
+    await tester.pumpAndSettle();
+    expect(find.text('Word removed'), findsNothing);
+    expect(find.text('Undo'), findsNothing);
+    await tester.tap(find.text('Autocorrect'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('Remove autocorrect'));
+    await tester.pumpAndSettle();
+    await tester.pageBack();
+    await tester.pumpAndSettle();
+    expect(find.text('Autocorrect removed'), findsNothing);
+    expect(find.text('Undo'), findsNothing);
+    await tester.pageBack();
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Keep this note'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byType(PopupMenuButton<String>));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Delete note'));
+    await tester.pumpAndSettle();
+
+    expect(await repo.all(), isEmpty);
+    expect(find.text('Note deleted'), findsOneWidget);
+    expect(find.text('Word removed'), findsNothing);
+    expect(find.text('Autocorrect removed'), findsNothing);
+    await tester.tap(find.text('Undo'));
+    await tester.pumpAndSettle();
+    expect((await repo.all()).single.body, 'Keep this note');
+    expect(settings.vocabulary, isEmpty);
+    expect(settings.autocorrectRules, isEmpty);
+  });
+
+  testWidgets('note deletion replaces older queued notification actions', (
+    tester,
+  ) async {
+    await repo.insert(seed('Keep this note'));
+    await tester.pumpWidget(await buildApp(repo));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Keep this note'));
+    await tester.pumpAndSettle();
+    var staleUndos = 0;
+    final messenger = ScaffoldMessenger.of(
+      tester.element(find.byKey(const ValueKey('note-body'))),
+    );
+    for (final message in ['Old operation', 'Queued operation']) {
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text(message),
+          action: SnackBarAction(label: 'Undo', onPressed: () => staleUndos++),
+        ),
+      );
+    }
+    await tester.pumpAndSettle();
+    await tester.tap(find.byType(PopupMenuButton<String>));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Delete note'));
+    await tester.pumpAndSettle();
+    expect(find.text('Note deleted'), findsOneWidget);
+    expect(find.text('Old operation'), findsNothing);
+    await tester.tap(find.text('Undo'));
+    await tester.pumpAndSettle();
+    expect((await repo.all()).single.body, 'Keep this note');
+    expect(staleUndos, 0);
+    await tester.pump(const Duration(seconds: 5));
+    await tester.pumpAndSettle();
+    expect(find.text('Queued operation'), findsNothing);
   });
 
   testWidgets('dark theme is defined and uses inverse canvas/ink', (
