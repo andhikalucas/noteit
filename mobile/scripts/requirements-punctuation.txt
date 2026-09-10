@@ -1,0 +1,5 @@
+# Host-only screen, Python 3.9. No app/runtime dependency changes.
+onnxruntime==1.19.2
+sentencepiece==0.2.0
+numpy==2.0.2
+PyYAML==6.0.2
