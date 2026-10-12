@@ -37,6 +37,9 @@ FetchContent_Declare(
     whispercpp
     GIT_REPOSITORY https://github.com/ggerganov/whisper.cpp.git
     GIT_TAG        080bbbe85230f624f0b52127f1ae1218247989f9
+    # Keep upstream LF bytes on Windows hosts with core.autocrlf=true; the
+    # source patches below verify exact SHA-256 hashes of the checkout.
+    GIT_CONFIG     core.autocrlf=false core.eol=lf
 )
 FetchContent_MakeAvailable(whispercpp)
 
