@@ -7,6 +7,7 @@ from pathlib import Path
 import wave
 
 from evaluate_local_candidates import read_pcm16_wav
+from hashing import sha256_file
 
 SAMPLE_RATE = 16_000
 
@@ -87,14 +88,6 @@ def write_fixture(path, segments, pcm_sources):
                         remaining -= block
 
 
-def file_digest(path):
-    digest = hashlib.sha256()
-    with Path(path).open("rb") as source:
-        for block in iter(lambda: source.read(1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
-
-
 def build_fixtures(first, second, output_dir):
     sources = [Path(first).resolve(strict=True), Path(second).resolve(strict=True)]
     pcm_sources = [read_pcm16_wav(path) for path in sources]
@@ -112,7 +105,7 @@ def build_fixtures(first, second, output_dir):
         raise FileExistsError("Stress artifacts already exist; select a fresh output directory.")
     manifest = dict(
         schemaVersion=1, sampleRate=SAMPLE_RATE, channels=1, sampleWidthBytes=2,
-        generatorPath=str(Path(__file__).resolve()), generatorSha256=file_digest(Path(__file__)),
+        generatorPath=str(Path(__file__).resolve()), generatorSha256=sha256_file(Path(__file__)),
         reproductionArgv=["python3", str(Path(__file__).resolve()), "--first", str(sources[0]),
                           "--second", str(sources[1]), "--output-dir", str(output_dir.resolve())],
         purpose="Synthetic stitched replay for scheduling, sustained load, and memory; not fresh long-form speech validation.",
@@ -122,7 +115,7 @@ def build_fixtures(first, second, output_dir):
             "Source-audio fraction includes original silence and is not measured voiced-speech fraction.",
             "No source clip is resampled, normalized, crossfaded, or truncated; only zero-valued silence is inserted.",
         ],
-        sources=[dict(index=index, path=str(path), fileSha256=file_digest(path),
+        sources=[dict(index=index, path=str(path), fileSha256=sha256_file(path),
                       pcmSha256=hashlib.sha256(pcm).hexdigest(), sampleCount=count,
                       durationSeconds=count / SAMPLE_RATE)
                  for index, (path, pcm, count) in enumerate(zip(sources, pcm_sources, counts))],
@@ -135,7 +128,7 @@ def build_fixtures(first, second, output_dir):
         source_count = sum(segment["endSample"] - segment["startSample"]
                            for segment in segments if segment["kind"] == "source")
         manifest["recordings"].append(dict(
-            id=identifier, file=filename, fileSha256=file_digest(path), sampleCount=total,
+            id=identifier, file=filename, fileSha256=sha256_file(path), sampleCount=total,
             durationSeconds=total / SAMPLE_RATE, sourceAudioSamples=source_count,
             syntheticSilenceSamples=total - source_count,
             sourceAudioFraction=source_count / total, construction=segments,

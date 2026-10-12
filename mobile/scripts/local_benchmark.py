@@ -21,6 +21,7 @@ import sys
 import tempfile
 import uuid
 from qwen_benchmark_assets import verify_model_dir, push_model_files
+from tokens import FORMATTING_TOKEN_PATTERN
 
 PACKAGE = "ai.voiceflow.voiceflow_mobile.benchmark"
 BENCHMARK_DEFINE = "NOTEIT_BENCHMARK=true"
@@ -91,7 +92,7 @@ def install_benchmark(args, adb, repository):
 
 
 def words(text):
-    return re.findall(r"[^\W_]+(?:['’][^\W_]+)*", text.casefold(), re.UNICODE)
+    return FORMATTING_TOKEN_PATTERN.findall(text.casefold())
 
 
 def edit_distance(expected, actual):

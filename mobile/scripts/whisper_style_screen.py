@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Fixed host-only Whisper decoding/style screen; never selects an app default."""
 import argparse
-import hashlib
 import json
 from pathlib import Path
 import platform
@@ -10,6 +9,7 @@ import tempfile
 import time
 import uuid
 
+from hashing import sha256_file
 from evaluate_local_candidates import read_pcm16_wav
 
 MODEL_SHA = "49c8fb02b65e6049d5fa6c04f81f53b867b5ec9540406812c643f177317f779f"
@@ -20,18 +20,10 @@ CONFIGURATIONS = [("greedy", 1, ""), ("greedy-style", 1, STYLE_PROMPT),
                   ("beam5", 5, ""), ("beam5-style", 5, STYLE_PROMPT)]
 
 
-def digest(path):
-    value = hashlib.sha256()
-    with path.open("rb") as source:
-        for block in iter(lambda: source.read(1024 * 1024), b""):
-            value.update(block)
-    return value.hexdigest()
-
-
 def runtime_provenance(cli, source):
     # These identify the supplied binary and source independently. A source hash
     # is not proof that an arbitrary CLI was built from that source.
-    return dict(cliPath=str(cli.resolve(strict=True)), cliSha256=digest(cli),
+    return dict(cliPath=str(cli.resolve(strict=True)), cliSha256=sha256_file(cli),
                 suppliedWhisperSourcePath=str(source.resolve(strict=True)),
                 binarySourceLinkVerified=False, inputTrimming="none")
 
@@ -55,9 +47,9 @@ def command(cli, model, audio, output, frames, beam, prompt):
 def evaluate(args):
     if args.repetitions not in (1, 2):
         raise ValueError("Use one or two repeats for this bounded screen.")
-    if digest(args.model) != MODEL_SHA or args.model.stat().st_size != 264_464_607:
+    if sha256_file(args.model) != MODEL_SHA or args.model.stat().st_size != 264_464_607:
         raise ValueError("Use the pinned Small Q8 model.")
-    if digest(args.whisper_source) != SOURCE_SHA:
+    if sha256_file(args.whisper_source) != SOURCE_SHA:
         raise ValueError("Use Whisper with both checked native fixes.")
     manifest = json.loads(args.manifest.read_text())
     provenance = runtime_provenance(args.cli, args.whisper_source)
@@ -74,7 +66,7 @@ def evaluate(args):
                                recordingId=recording["id"], configurationId=name, repetition=repetition,
                                host=platform.platform(), runtime="whisper-cli-host-only",
                                modelSha256=MODEL_SHA, whisperSourceSha256=SOURCE_SHA,
-                               audioSha256=digest(audio), audioMs=frames / 16,
+                               audioSha256=sha256_file(audio), audioMs=frames / 16,
                                beamSize=beam, recognitionPrompt=prompt, language="auto",
                                pipeline=False, paced=False, postStopMs=None, reviewRequired=True)
                     start = time.perf_counter()

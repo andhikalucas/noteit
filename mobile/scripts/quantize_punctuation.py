@@ -15,7 +15,8 @@ import tempfile
 import time
 import uuid
 
-from evaluate_punctuation import PACKAGES, LabelFormatter, digest, source_span_result, verify
+from hashing import sha256_file
+from evaluate_punctuation import PACKAGES, LabelFormatter, source_span_result, verify
 from punctuation_safety import evaluate_candidate
 
 
@@ -98,7 +99,7 @@ def quantize(args):
         "recipe": RECIPE, "sourceAssets": source_package,
         "sourceDirectory": str(args.source_dir.resolve()),
         "host": platform.platform(), "python": sys.version,
-        "scriptSha256": digest(Path(__file__)),
+        "scriptSha256": sha256_file(Path(__file__)),
         "sources": [
             "https://onnxruntime.ai/docs/performance/model-optimizations/quantization.html",
             "https://raw.githubusercontent.com/microsoft/onnxruntime/v1.19.2/onnxruntime/python/tools/quantization/registry.py",
@@ -126,7 +127,7 @@ def quantize(args):
             shutil.copyfile(args.source_dir / name, destination)
         onnx.checker.check_model(str(output_model))
         report["after"] = graph_summary(output_model)
-        report["quantizedModel"] = [output_model.name, output_model.stat().st_size, digest(output_model)]
+        report["quantizedModel"] = [output_model.name, output_model.stat().st_size, sha256_file(output_model)]
         report["sizeRatio"] = output_model.stat().st_size / source_package["model"][1]
         # Recheck the source after the transformation as a preservation check.
         verify(args.source_dir, source_package, args.collector)
@@ -170,10 +171,10 @@ def screen(args):
         baseline[case["id"]] = evaluate_candidate(case["rawText"], rendered["candidateText"])
     provenance = {
         "runId": str(uuid.uuid4()), "recipe": RECIPE, "derivedModel": model_asset,
-        "baselineResultsSha256": digest(args.baseline_results),
-        "quantizationReportSha256": digest(args.experiment_dir / "quantization.json"),
-        "scriptSha256": digest(Path(__file__)),
-        "dependencies": {Path(module.__file__).name: digest(Path(module.__file__)) for module in (
+        "baselineResultsSha256": sha256_file(args.baseline_results),
+        "quantizationReportSha256": sha256_file(args.experiment_dir / "quantization.json"),
+        "scriptSha256": sha256_file(Path(__file__)),
+        "dependencies": {Path(module.__file__).name: sha256_file(Path(module.__file__)) for module in (
             punctuation_safety, punctuation_spans, evaluate_local_candidates, evaluate_punctuation)},
         "host": platform.platform(), "versions": formatter.versions,
         "modelLoadMs": round(load_ms, 2), "threads": 4,

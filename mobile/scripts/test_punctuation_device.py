@@ -64,7 +64,7 @@ class PunctuationDeviceTest(unittest.TestCase):
         self.assertEqual(result["rawText"], "hi")
         self.assertEqual(result["predictions"], original["cases"][0]["predictions"])
         self.assertEqual(result["assets"], device.PACKAGES["small"])
-        self.assertEqual(result["sourceResultsSha256"], device.digest(self.args.results))
+        self.assertEqual(result["sourceResultsSha256"], device.sha256_file(self.args.results))
         self.assertEqual(result["sourceRowIndex"], 0)
         self.assertEqual(result["inferenceMs"], 2.5)
         self.assertIsNone(result["postStopMs"])
@@ -144,7 +144,7 @@ class PunctuationDeviceTest(unittest.TestCase):
                          ["small-load", "small-warm", "xlmr-load", "xlmr-warm"])
         self.assertFalse(manifest["shuffle"])
         self.assertEqual(manifest["modelAssets"], device.PACKAGES)
-        self.assertEqual(manifest["casesSha256"], device.digest(self.args.cases))
+        self.assertEqual(manifest["casesSha256"], device.sha256_file(self.args.cases))
         first = manifest["configurations"][0]
         self.assertEqual(first["cases"][0], dict(id="mixed-01", rawText="hi", windows=[[1, 42, 2]]))
         self.assertTrue(first["cold"])

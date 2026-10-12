@@ -18,6 +18,7 @@ import urllib.parse
 import urllib.request
 
 from local_benchmark import edit_distance, words
+from tokens import FORMATTING_TOKEN_PATTERN
 
 
 def read_pcm16_wav(path, max_frames=30 * 16000):
@@ -107,7 +108,6 @@ RESTORE_FORMATTING_INSTRUCTION = (
     "Return JSON with one string field named text."
 )
 
-FORMATTING_TOKEN_PATTERN = re.compile(r"[^\W_]+(?:['’][^\W_]+)*", re.UNICODE)
 
 
 def case_sensitive_formatting_tokens(text):

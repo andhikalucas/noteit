@@ -10,6 +10,8 @@ import sys
 import time
 import uuid
 
+from hashing import sha256_file
+
 UPSTREAM_REVISION = "e0723a4f5dfe5f4fac8571a916ea03571b87edd3"
 COLLECTOR_SHA = "68c4ba402a81c6eedd0566ab0f637a61e790c7db01ed0d39348e049e7e1a5c9e"
 PACKAGES = {
@@ -26,14 +28,6 @@ PACKAGES = {
         "configSha": "fb27ec0ddc253655cd89aee3de9976a4c6b5d1b3a6a6e8fdcb511f7a522dde00",
     },
 }
-
-
-def digest(path):
-    value = hashlib.sha256()
-    with path.open("rb") as source:
-        for block in iter(lambda: source.read(1024 * 1024), b""):
-            value.update(block)
-    return value.hexdigest()
 
 
 def windows(ids, maximum, overlap=16):
@@ -84,11 +78,11 @@ def verify(directory, package, collector):
     for field in ("model", "tokenizer"):
         name, size, sha = package[field]
         path = directory / name
-        if path.stat().st_size != size or digest(path) != sha:
+        if path.stat().st_size != size or sha256_file(path) != sha:
             raise ValueError("Asset integrity failure: " + name)
-    if digest(directory / "config.yaml") != package["configSha"]:
+    if sha256_file(directory / "config.yaml") != package["configSha"]:
         raise ValueError("Configuration integrity failure.")
-    if digest(collector) != COLLECTOR_SHA:
+    if sha256_file(collector) != COLLECTOR_SHA:
         raise ValueError("Use the pinned upstream collector, not arbitrary Python.")
 
 
@@ -176,8 +170,8 @@ def rerender(args):
     if not source_rows or any(r.get("model") != args.model or r.get("assets") != json.loads(json.dumps(package))
                               or "predictions" not in r for r in source_rows):
         raise ValueError("Expected saved predictions from the selected verified model.")
-    source_sha = digest(args.reuse_results)
-    dependency_hashes = {Path(m.__file__).name: digest(Path(m.__file__)) for m in
+    source_sha = sha256_file(args.reuse_results)
+    dependency_hashes = {Path(m.__file__).name: sha256_file(Path(m.__file__)) for m in
                          (punctuation_safety, punctuation_spans, evaluate_local_candidates)}
     run_id = str(uuid.uuid4())
     errors = False
@@ -187,7 +181,7 @@ def rerender(args):
                        reusedInference=True, sourceInferenceAndGuardMs=old["formattingMs"],
                        formattingMs=None, modelLoadMs=None, timingScope="cached_label_render_only",
                        outputPolicy="original_spans_v1", guardDependencies=dependency_hashes,
-                       scriptSha256=digest(Path(__file__)), upstreamCandidateText=old.get("candidateText"))
+                       scriptSha256=sha256_file(Path(__file__)), upstreamCandidateText=old.get("candidateText"))
             row["upstreamSentenceTexts"] = row.pop("sentenceTexts", None)
             for stale in ("error", "guardFlags", "skippedActions"):
                 row.pop(stale, None)
@@ -283,12 +277,12 @@ def evaluate(args):
     run_id = str(uuid.uuid4())
     provenance = dict(model=args.model, modelRevision=package["revision"], assets=package,
                       collectorRevision=UPSTREAM_REVISION, collectorSha256=COLLECTOR_SHA,
-                      scriptSha256=digest(Path(__file__)), casesSha256=digest(args.cases),
+                      scriptSha256=sha256_file(Path(__file__)), casesSha256=sha256_file(args.cases),
                       effectiveCasesSha256=hashlib.sha256(json.dumps(cases, sort_keys=True).encode()).hexdigest(),
                       windowSmokeOnly=args.window_smoke_only,
-                      guardDependencies={Path(m.__file__).name: digest(Path(m.__file__))
+                      guardDependencies={Path(m.__file__).name: sha256_file(Path(m.__file__))
                                          for m in (punctuation_safety, punctuation_spans, evaluate_local_candidates)},
-                      asrResultsSha256=digest(args.asr_results) if args.asr_results else None,
+                      asrResultsSha256=sha256_file(args.asr_results) if args.asr_results else None,
                       host=platform.platform(), versions=formatter.versions, threads=4,
                       runtime="onnx-cpu-host-only", timingScope="text_only_not_asr", paced=False,
                       postStopMs=None, modelLoadMs=round(load_ms, 2),

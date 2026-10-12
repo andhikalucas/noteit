@@ -62,7 +62,7 @@ def render_actions(raw, actions):
             set(item) != {"end", "mark"} or not isinstance(item["mark"], str) or
             item["mark"] not in (".", "?", "!") for item in sentences)):
         raise ValueError("Each sentence action must contain exactly end and a valid mark.")
-    ends = checked_indices([item["end"] for item in sentences], count, "sentences")
+    ends = set(checked_indices([item["end"] for item in sentences], count, "sentences"))
     paragraphs = checked_indices(actions["paragraphs"], count, "paragraphs")
     capitals = set(checked_indices(actions["capitalize"], count, "capitalize"))
     if any(index not in ends or index == count for index in paragraphs):

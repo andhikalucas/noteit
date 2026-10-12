@@ -9,7 +9,8 @@ import math
 from pathlib import Path
 import re
 
-from evaluate_punctuation import PACKAGES, digest, load_cases, source_span_result, verify, windows
+from hashing import sha256_file
+from evaluate_punctuation import PACKAGES, load_cases, source_span_result, verify, windows
 
 
 def tokenizer_for(root, kind, collector):
@@ -44,8 +45,8 @@ def prepare(args):
     manifest = dict(repetitions=1, shuffle=False, cooldownMs=5000, configurations=configurations,
                     recordings=[dict(id="fixed-text-cases", file=str(args.wav.resolve()),
                                      reference="", languageGroup="mixed", split="text_screen")],
-                    casesSha256=digest(args.cases), preparationScriptSha256=digest(Path(__file__)),
-                    asrResultsSha256=digest(args.asr_results) if args.asr_results else None,
+                    casesSha256=sha256_file(args.cases), preparationScriptSha256=sha256_file(Path(__file__)),
+                    asrResultsSha256=sha256_file(args.asr_results) if args.asr_results else None,
                     modelAssets=PACKAGES,
                     timingScope="labels_only_excludes_tokenization_rendering_and_asr")
     return manifest
@@ -103,14 +104,14 @@ def render(args):
     import punctuation_spans
     import evaluate_punctuation
     import evaluate_local_candidates
-    dependencies = {Path(module.__file__).name: digest(Path(module.__file__)) for module in
+    dependencies = {Path(module.__file__).name: sha256_file(Path(module.__file__)) for module in
                     (punctuation_safety, punctuation_spans, evaluate_punctuation, evaluate_local_candidates)}
     rows = [json.loads(line) for line in args.results.read_text().splitlines() if line.strip()]
     if not rows:
         raise ValueError("No phone results.")
     sources = {}
     rendered = []
-    source_sha = digest(args.results)
+    source_sha = sha256_file(args.results)
     seen_runs = set()
     for row_index, row in enumerate(rows):
         if not isinstance(row, dict):
@@ -160,7 +161,7 @@ def render(args):
                           predictions=case["predictions"], assets=package,
                           inferenceMs=case["inferenceMs"],
                           runtimeVersion=row["runtimeVersion"], guardDependencies=dependencies,
-                          rendererScriptSha256=digest(Path(__file__)), postStopMs=None,
+                          rendererScriptSha256=sha256_file(Path(__file__)), postStopMs=None,
                           timingScope="phone_labels_host_render_not_end_to_end", reviewRequired=True)
             rendered.append(output)
     return rendered
