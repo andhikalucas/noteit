@@ -1,107 +1,100 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Guidance for Claude Code when working in this repository.
 
 ## What this is
 
-VoiceFlow is a native Windows voice-dictation app (a clone of Wispr Flow): hold a hotkey, speak,
-and polished text appears at the cursor in whatever app has focus. Transcription runs fully
-locally via whisper.cpp (Whisper.net) — audio never leaves the machine. See README.md for the
-full feature list and privacy model; it's kept up to date and worth reading before UX changes.
+noteit! is a personal Android notes and dictation app built with Flutter, with a Kotlin/C
+native layer for audio capture, on-device Whisper, and cross-app text insertion. Gemini is the
+primary transcription engine; a local whisper.cpp fallback is available and chosen explicitly by
+the user. It targets one device: a Samsung A55 (8 GB, Android 16). English and Indonesian are
+mixed within sentences, and preserving the spoken wording matters more than speed.
 
-This is a Windows-only WPF/.NET 8 app. It cannot be built or run on macOS/Linux — `dotnet build`
-requires `net8.0-windows` and Windows-only APIs (WPF, WinForms, DPAPI, Win32 hooks). Development
-happens cross-platform via editing, but building/running/testing requires a Windows machine.
+All app code lives under `mobile/`. `docs/` holds the original design documents.
+Read `mobile/docs/next-version-handoff.md` before changing behaviour; it records decisions that
+look like bugs but are deliberate.
 
 ## Build & test
 
-```powershell
-dotnet build VoiceFlow.sln
-dotnet run --project src/VoiceFlow.App
-
-dotnet test                                          # all tests, incl. E2E
-dotnet test --filter "Category!=E2E"                 # skip true end-to-end tests
-dotnet test --filter "FullyQualifiedName~TextFormatterTests"   # one test class
-dotnet test --filter "FullyQualifiedName~TextFormatterTests.MethodName"  # one test
+```sh
+cd mobile
+flutter pub get
+flutter analyze
+flutter test                                              # Dart unit + widget tests
+python -m unittest discover -s scripts -p 'test_*.py'     # evaluation tooling tests
+cd android && ./gradlew :app:testDebugUnitTest            # Kotlin unit tests (JVM)
+flutter build apk --release --target-platform android-arm64
 ```
 
-- E2E tests (`EndToEndTests.cs`, tagged `[Trait("Category", "E2E")]`) need an unlocked interactive
-  desktop: one drives Windows TTS → Whisper → formatter, another does real `SendInput` into a live
-  WinForms textbox and asserts on actual keyboard/clipboard delivery. They download the 75 MB tiny
-  Whisper model once and self-skip (with a logged reason) if the desktop is locked or the user is
-  actively typing elsewhere — that's environmental, not a test failure.
-- No CI config exists in this repo; there's no lint/format command beyond `dotnet build` warnings.
-- `Directory.Build.props` sets `NuGetAuditMode=all` (surfaces vulnerable transitive packages too,
-  not just direct ones) — see the SQLitePCLRaw pin note in `VoiceFlow.Core.csproj` for why a
-  package version was force-pinned above what its parent package requires.
+- The Gemini key comes from the ignored `mobile/android/secrets.properties`. See
+  `mobile/docs/gemini-setup.md`. Never commit it, and never print it.
+- Device integration tests (`mobile/integration_test/`) must run against the isolated
+  benchmark package `ai.voiceflow.voiceflow_mobile.benchmark`, never the personal app.
+  Any Flutter entry point other than `lib/main.dart`, or the `NOTEIT_BENCHMARK=true`
+  dart-define, switches the Gradle build to that sandbox automatically.
+- No CI exists. `flutter analyze` plus the three test suites above are the gate.
 
 ## Architecture
 
-Three projects, one dependency direction: `Core` ← `App` ← `Tests` (Tests references both).
-
 ```
-src/VoiceFlow.Core     # no-UI logic: settings, SQLite history store, formatting pipeline,
-                        # Whisper transcription, model downloader, command interpreter, LLM client
-src/VoiceFlow.App       # WPF tray app: keyboard hook, text injection, Flow Bar overlay, windows
-src/VoiceFlow.Tests     # xUnit: unit tests + true E2E (see above)
-```
-
-`Core` has no dependency on WPF/WinForms/Win32 — it's the testable, UI-free half. Anything that
-touches window handles, SendInput, clipboard, or UI Automation belongs in `App/Interop`, not `Core`.
-
-### The dictation pipeline
-
-`FlowController` (`src/VoiceFlow.App/FlowController.cs`) is the state machine at the center of the
-app — start here to understand how a dictation flows end to end:
-
-```
-KeyboardHook (WH_KEYBOARD_LL)
-  → FlowController (state machine: Idle → Recording → Processing → Idle)
-  → AudioRecorder (NAudio, 16 kHz mono)
-  → TranscriptionService (Whisper.net)
-  → TextFormatter (dictionary → snippets → cleanup) | CommandInterpreter (Command Mode)
-  → TextInjector (clipboard-paste with restore, or Unicode SendInput)
-  → HistoryStore (SQLite)
+mobile/lib                      Flutter UI and state (Provider)
+  screens/                      notes list, editor, settings, terminology, bubble setup
+  data/                         NotesRepository (sqflite) and NotesProvider
+  services/                     SettingsService (SharedPreferences), SpeechService,
+                                OverlayBridge (MethodChannel to Kotlin)
+  theme/                        design tokens and shared widgets (see docs/DESIGN.MD)
+mobile/android/app/src/main
+  kotlin/.../MainActivity.kt    MethodChannel host; routes Dart calls to the coordinator
+  kotlin/.../DictationCoordinator.kt
+                                state machine: start/stop/cancel, journal, retry, delivery
+  kotlin/.../AudioCapture.kt    AudioRecord at 16 kHz mono, streams PCM to a WAV + pipeline
+  kotlin/.../GeminiTranscriber.kt
+                                Files API upload + generate, cancellable, no retries hidden
+  kotlin/.../LocalPipeline.kt   chunked local Whisper session (pause-based chunking)
+  kotlin/.../WhisperEngine.kt   JNI wrapper, model verification, warm-up
+  kotlin/.../ModelStore.kt      model download with SHA-256 verification
+  kotlin/.../OverlayService.kt  floating mic bubble (SYSTEM_ALERT_WINDOW)
+  kotlin/.../InsertionService.kt
+                                AccessibilityService that inserts text into other apps
+  kotlin/.../DictationFiles.kt  journal + WAV files; crash recovery
+  cpp/                          whisper_jni.c, pinned whisper.cpp with two source patches
 ```
 
-Key things that aren't obvious from any single file:
+### The dictation flow
 
-- **Chords are fixed** (Wispr-style, not user-remappable in v1): hold `Ctrl+Win` = push-to-talk;
-  `Ctrl+Win+Space` = hands-free toggle; hold `Ctrl+Win` then `Alt` = Command Mode; `Esc` cancels.
-  `KeyboardHook` owns chord detection and fires high-level events (`ChordDown`, `HandsFreeKey`,
-  `CommandKeyJoined`, `ForeignKeyDown`, ...); `FlowController` only reacts to those events and
-  never touches raw VK codes. All hook events are marshalled onto the UI dispatcher immediately —
-  `FlowController` state only ever changes on the UI thread.
-- **`ForeignKeyDown` matters**: any non-chord key pressed while `Ctrl+Win` is held (e.g. an arrow
-  key for virtual-desktop switching) is treated as an OS shortcut, not a dictation attempt, and
-  silently aborts the recording. Don't "fix" this into a normal cancel-with-feedback path.
-- **Privacy gating happens twice**: once at record start (`ValidateTarget`) and again immediately
-  before text insertion (`InsertValidatedAsync`), because focus can move to a different app or a
-  password field while Whisper is transcribing in the background. The synthetic Enter from "press
-  enter" is only sent if focus never left the window recording started in.
-- **Command Mode** grabs the current selection via synthetic Ctrl+C *before* transcription starts
-  (while it's still highlighted), then either runs a deterministic local transform
-  (`CommandInterpreter.TryLocalTransform` — case changes, list formatting, "clean this up") or, if
-  none matches, calls the user's own OpenAI-compatible endpoint. There's no LLM fallback baked in:
-  if no API key is configured, free-form commands return a friendly error rather than trying.
-- **`TextFormatter.Format`** is a strict, ordered pipeline (dictionary fixes → "press enter"
-  detection → whole-utterance snippet match → inline snippets → spoken layout commands → filler
-  removal scaled by `CleanupLevel` → whitespace/punctuation tidy → capitalization). Whole-utterance
-  snippet matches return stored content verbatim and skip the rest of the pipeline (so an email
-  snippet isn't capitalization-mangled). English-specific regex rules are skipped entirely for
-  non-English dictations.
-- **`TextInjector`** must run on the UI (STA) thread (clipboard access). Clipboard writes are
-  tagged to exclude them from Windows Clipboard History and Cloud Clipboard sync, and the previous
-  clipboard contents are restored after paste. Falls back to simulated keystrokes if the clipboard
-  is locked by another process, or always if `InsertViaKeystrokes` is set (for apps that block
-  paste). Injection cannot reach elevated/admin windows — that's a hard Windows UIPI restriction,
-  not a bug.
-- **Model downloads are checksum-verified**: `ModelDownloader` reads the expected SHA-256 and size
-  from the Hugging Face LFS pointer file, streams the real model while hashing incrementally, and
-  aborts if the stream exceeds the declared size (disk-fill guard) or the hash/size don't match
-  before the file is moved into place.
-- Settings persist as JSON at `%APPDATA%\VoiceFlow\settings.json` via write-then-rename (crash
-  safety). The optional LLM API key is stored DPAPI-protected (current-user scope) and is never
-  written to the JSON file in plaintext — note the threat model documented in
-  `SettingsService`: this protects the key at rest and off-machine, not from other code already
-  running as the same user.
+```
+tap bubble / mic button
+  → DictationCoordinator.start   (journal: recording)
+  → AudioCapture → session WAV   (+ LocalPipeline chunks when engine = local)
+  → stop                         (journal: processing)
+  → GeminiTranscriber | LocalPipeline/WhisperEngine
+  → PersonalAutocorrect          (user vocabulary + autocorrect rules)
+  → journal: completed → deliver to note or InsertionService → journal: terminal
+```
+
+Things that are deliberate and should not be "fixed":
+
+- **No silent engine switching.** A Gemini failure offers Retry or an explicit choice of Local.
+- **The journal is durable.** Every state transition is written then fsynced so a crash can
+  resume or retry with the retained recording. Persistence returns the committed result; a
+  failed list refresh after a committed write is shown as a Retry, never re-executed.
+- **Undo is scoped.** It targets the exact deleted note, deduplicates concurrent requests and
+  keeps newer deletions intact. Tests in `test/notes_provider_test.dart` protect this.
+- **Local model files are hash-verified before JNI load**, and the whisper.cpp source patches
+  under `cpp/cmake/` are checked byte-for-byte. Do not loosen either.
+- **Experimental runtimes are isolated, not deleted.** Q8 readable candidates, ONNX punctuation,
+  SentencePiece and Qwen live in `src/punctuationBenchmark`, `src/qwenBenchmark` and the
+  benchmark gates in `build.gradle.kts`. They are never compiled into the personal release.
+  The llama.cpp cleanup runtime builds only when `NOTEIT_CLEANUP_RUNTIME=ON` (benchmark builds).
+- **Language handling.** Do not add language restrictions or single-language modes without
+  agreeing scope first; mixed-language fidelity failed on both Whisper candidates and the
+  investigation is open.
+
+## Conventions
+
+- Kotlin regexes and constant sets belong in `companion object` or top-level `val`s, not
+  inside functions on the audio or text hot paths.
+- Dart screens should scope rebuilds with `context.select` rather than `watch` on whole
+  providers; notes-list and editor rebuilds were a measured cost.
+- Keep recordings, transcripts, model files and raw benchmark output in ignored
+  `mobile/build/benchmarks/`. Never commit them.

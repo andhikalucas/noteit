@@ -2,7 +2,7 @@
 
 Date: 2026-09-10
 
-Status: Preparing the private noteit! 1.0.0 build 2 release. Gemini remains primary; the existing local fallback is unchanged. Both new local candidates failed fresh mixed-language validation and are not promoted. The plan below records the original workstreams and later scope changes; the current release decision and deferred work take precedence. See [implementation status](mobile-implementation-progress.md), [release status](../mobile/docs/release-status.md), and [next-version handoff](../mobile/docs/next-version-handoff.md).
+Status: Preparing the private noteit! 1.0.0 build 2 release. Gemini remains primary; the existing local fallback is unchanged. Both new local candidates failed fresh mixed-language validation and are not promoted. The plan below records the original workstreams and later scope changes; the current release decision and deferred work take precedence. See [release status](../mobile/docs/release-status.md), and [next-version handoff](../mobile/docs/next-version-handoff.md).
 
 ## Goal and agreed scope
 
