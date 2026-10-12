@@ -126,10 +126,10 @@ Java_ai_voiceflow_voiceflow_1mobile_WhisperNative_fullTranscribe(
     // 30 s window (1500 units = 30 s → 50 units/s). A 4 s sentence then costs
     // ~1/6 of the encoder work. Padded by 32 units so the tail isn't clipped.
     if (scaled_context) {
-        int ctx = (int)((double) n / WHISPER_SAMPLE_RATE * 50.0) + 32;
-        if (ctx < 192)  ctx = 192;
-        if (ctx > 1500) ctx = 1500;
-        params.audio_ctx = ctx;
+        int audio_ctx_units = (int)((double) n / WHISPER_SAMPLE_RATE * 50.0) + 32;
+        if (audio_ctx_units < 192)  audio_ctx_units = 192;
+        if (audio_ctx_units > 1500) audio_ctx_units = 1500;
+        params.audio_ctx = audio_ctx_units;
     }
 
     // No temperature-fallback re-decodes: a low-confidence utterance would

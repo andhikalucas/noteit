@@ -52,37 +52,41 @@ add_library(noteit_whisper SHARED whisper_jni.c)
 target_compile_definitions(noteit_whisper PRIVATE NOTEIT_WHISPER_VULKAN=$<BOOL:${NOTEIT_WHISPER_VULKAN}>)
 target_link_libraries(noteit_whisper PRIVATE whisper ${LOG_LIB} android)
 
-# llama.cpp uses a newer ggml ABI than pinned Whisper. Build it in its own
-# CMake project and hide all its static-library symbols inside the JNI DSO.
-# Sharing a ggml target or exported ggml_* symbols would corrupt one runtime.
-FetchContent_Declare(llamacleanup
-    URL https://codeload.github.com/ggml-org/llama.cpp/tar.gz/434ddbbc0e30522e897670681e503b797c12b7c1
-    URL_HASH SHA256=dbcd40af496a36667a0b78eabc406b4545df9ff6ce34a5a06f5390c19b67ab17
-    SOURCE_SUBDIR noteit-external-only)
-FetchContent_MakeAvailable(llamacleanup)
-include(ExternalProject)
-set(CLEANUP_BINARY_DIR "${CMAKE_CURRENT_BINARY_DIR}/cleanup-runtime")
-ExternalProject_Add(cleanup_runtime_build
-    SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/cleanup_runtime"
-    BINARY_DIR "${CLEANUP_BINARY_DIR}"
-    CMAKE_ARGS
-        -DCMAKE_TOOLCHAIN_FILE=${CMAKE_TOOLCHAIN_FILE}
-        -DCMAKE_MAKE_PROGRAM=${CMAKE_MAKE_PROGRAM}
-        -DANDROID_ABI=${ANDROID_ABI}
-        -DANDROID_PLATFORM=${ANDROID_PLATFORM}
-        -DANDROID_STL=c++_shared
-        -DCMAKE_BUILD_TYPE=Release
-        -DLLAMA_SOURCE_DIR=${llamacleanup_SOURCE_DIR}
-    BUILD_COMMAND ${CMAKE_COMMAND} --build <BINARY_DIR> --target noteit_cleanup --parallel 4
-    INSTALL_COMMAND ""
-    BUILD_ALWAYS TRUE
-    BUILD_BYPRODUCTS "${CLEANUP_BINARY_DIR}/libnoteit_cleanup.so")
-add_library(noteit_cleanup SHARED IMPORTED GLOBAL)
-set_target_properties(noteit_cleanup PROPERTIES IMPORTED_LOCATION "${CLEANUP_BINARY_DIR}/libnoteit_cleanup.so")
-add_dependencies(noteit_cleanup cleanup_runtime_build)
-# Make the imported runtime a packaged dependency even before a cleanup model
-# is downloaded. Loading the DSO itself does not load a model or allocate KV cache.
-target_link_libraries(noteit_whisper PRIVATE "-Wl,--no-as-needed" noteit_cleanup "-Wl,--as-needed")
+# Benchmark-only: personal builds do not package the llama.cpp cleanup runtime.
+option(NOTEIT_CLEANUP_RUNTIME "Build and package the llama.cpp cleanup runtime" OFF)
+if(NOTEIT_CLEANUP_RUNTIME)
+    # llama.cpp uses a newer ggml ABI than pinned Whisper. Build it in its own
+    # CMake project and hide all its static-library symbols inside the JNI DSO.
+    # Sharing a ggml target or exported ggml_* symbols would corrupt one runtime.
+    FetchContent_Declare(llamacleanup
+        URL https://codeload.github.com/ggml-org/llama.cpp/tar.gz/434ddbbc0e30522e897670681e503b797c12b7c1
+        URL_HASH SHA256=dbcd40af496a36667a0b78eabc406b4545df9ff6ce34a5a06f5390c19b67ab17
+        SOURCE_SUBDIR noteit-external-only)
+    FetchContent_MakeAvailable(llamacleanup)
+    include(ExternalProject)
+    set(CLEANUP_BINARY_DIR "${CMAKE_CURRENT_BINARY_DIR}/cleanup-runtime")
+    ExternalProject_Add(cleanup_runtime_build
+        SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/cleanup_runtime"
+        BINARY_DIR "${CLEANUP_BINARY_DIR}"
+        CMAKE_ARGS
+            -DCMAKE_TOOLCHAIN_FILE=${CMAKE_TOOLCHAIN_FILE}
+            -DCMAKE_MAKE_PROGRAM=${CMAKE_MAKE_PROGRAM}
+            -DANDROID_ABI=${ANDROID_ABI}
+            -DANDROID_PLATFORM=${ANDROID_PLATFORM}
+            -DANDROID_STL=c++_shared
+            -DCMAKE_BUILD_TYPE=Release
+            -DLLAMA_SOURCE_DIR=${llamacleanup_SOURCE_DIR}
+        BUILD_COMMAND ${CMAKE_COMMAND} --build <BINARY_DIR> --target noteit_cleanup --parallel 4
+        INSTALL_COMMAND ""
+        BUILD_ALWAYS TRUE
+        BUILD_BYPRODUCTS "${CLEANUP_BINARY_DIR}/libnoteit_cleanup.so")
+    add_library(noteit_cleanup SHARED IMPORTED GLOBAL)
+    set_target_properties(noteit_cleanup PROPERTIES IMPORTED_LOCATION "${CLEANUP_BINARY_DIR}/libnoteit_cleanup.so")
+    add_dependencies(noteit_cleanup cleanup_runtime_build)
+    # Make the imported runtime a packaged dependency even before a cleanup model
+    # is downloaded. Loading the DSO itself does not load a model or allocate KV cache.
+    target_link_libraries(noteit_whisper PRIVATE "-Wl,--no-as-needed" noteit_cleanup "-Wl,--as-needed")
+endif()
 
 option(NOTEIT_PUNCTUATION_BENCHMARK "Build the isolated SentencePiece tokenizer benchmark" OFF)
 if(NOTEIT_PUNCTUATION_BENCHMARK)

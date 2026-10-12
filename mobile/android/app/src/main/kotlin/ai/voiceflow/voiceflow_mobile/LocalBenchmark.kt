@@ -210,6 +210,7 @@ object LocalBenchmark {
             configuration.optInt("silenceThresholdRms", 64),
             pauseOnly,
             normalPriority,
+            collectMeasurements = true,
         )
         require(!recognition.useGpu || WhisperNative.vulkanCompiled()) {
             "Build with NOTEIT_WHISPER_VULKAN=ON before requesting GPU benchmarks."
@@ -239,7 +240,7 @@ object LocalBenchmark {
             val buffer = ByteArray(64 * 1024)
             while (true) { val n = stream.read(buffer); if (n < 0) break; sha.update(buffer, 0, n) }
         }
-        val audioHash = sha.digest().joinToString("") { "%02x".format(it) }
+        val audioHash = sha.digest().toHex()
         val peakPssKb = AtomicInteger(0)
         val sampler = Executors.newSingleThreadScheduledExecutor()
         sampler.scheduleAtFixedRate({

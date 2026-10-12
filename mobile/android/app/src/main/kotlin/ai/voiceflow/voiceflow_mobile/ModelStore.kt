@@ -122,7 +122,7 @@ internal object ModelIntegrity {
                 if (count > 0) digest.update(buffer, 0, count)
             }
         }
-        return digest.digest().joinToString("") { "%02x".format(it) } == expectedSha
+        return digest.digest().toHex() == expectedSha
     }
 
     fun install(candidate: File, target: File, expectedBytes: Long, expectedSha: String) {

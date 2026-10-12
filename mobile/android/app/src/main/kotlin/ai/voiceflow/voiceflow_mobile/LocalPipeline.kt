@@ -25,6 +25,8 @@ data class LocalPipelineConfig(
     val benchmarkPauseOnly: Boolean = false,
     val benchmarkNormalPriority: Boolean = false,
     val readableCandidate: Boolean = false,
+    // Benchmark-only per-chunk timing/priority records; production leaves this off.
+    val collectMeasurements: Boolean = false,
 ) {
     init {
         require(minimumChunkMs in 500..30_000)
@@ -202,6 +204,8 @@ internal class PipelinedLocalSession(
     private val jobs = mutableListOf<Future<*>>()
     private val transcript = StringBuilder()
     private val measurements = mutableListOf<LocalChunkMeasurement>()
+    private val vocabularyPrompt: String? =
+        options.vocabulary.filter { it.isNotBlank() }.joinToString(", ").take(2_000).ifBlank { null }
     private val cleanupMeasurements = mutableListOf<LocalCleanupMeasurement>()
     private val cleanupQueue = LocalCleanupPending()
     private val cleanupWindow = LocalCleanupWindow(config.cleanupContextSentences)
@@ -251,13 +255,13 @@ internal class PipelinedLocalSession(
                     val samples = readChunk(chunk)
                     // Record the actual caller thread, not its requested priority or
                     // an assumed Android Java-to-Linux mapping. Audio stays unchanged.
-                    val javaPriority = Thread.currentThread().priority
-                    val linuxNice = runCatching {
+                    val javaPriority = if (config.collectMeasurements) Thread.currentThread().priority else null
+                    val linuxNice = if (config.collectMeasurements) runCatching {
                         android.os.Process.getThreadPriority(android.os.Process.myTid())
-                    }.getOrNull()
+                    }.getOrNull() else null
                     val result = WhisperEngine.recognize(
                         context, samples, config.recognition,
-                        options.vocabulary.filter { it.isNotBlank() }.joinToString(", ").take(2_000).ifBlank { null },
+                        vocabularyPrompt,
                         chunk.leadingOverlapMs, ::isCancelled,
                     ) ?: throw DictationException(
                         if (isCancelled()) "cancelled" else "local_failed",
@@ -268,7 +272,7 @@ internal class PipelinedLocalSession(
                         if (transcript.isNotEmpty()) transcript.append(' ')
                         transcript.append(result.text)
                     }
-                    synchronized(measurements) {
+                    if (config.collectMeasurements) synchronized(measurements) {
                         measurements += LocalChunkMeasurement(chunk.startSample, chunk.endSample, queued, start,
                             SystemClock.elapsedRealtime(), result.loadMs, result.inferenceMs, result.text,
                             javaPriority = javaPriority, linuxNice = linuxNice, inputSampleCount = samples.size)

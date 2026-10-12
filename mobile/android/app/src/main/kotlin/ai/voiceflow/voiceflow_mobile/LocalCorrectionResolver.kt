@@ -13,6 +13,8 @@ object LocalCorrectionResolver {
     private val separator = Regex("[ \\t,]*")
     private val singlePeriod = Regex("[ \\t]*\\.[ \\t]*")
     private val spaces = Regex("[ \\t]+")
+    private val orWords = setOf("atau", "or")
+    private val conjunctions = setOf("dan", "atau", "and", "or")
     private val negative = setOf("ga", "gak", "nggak", "enggak", "tidak", "tak", "bukan", "not")
     private val protectedNegative = negative + setOf("jangan", "belum", "tanpa", "never", "no", "dont", "cannot")
     private val numbers = setOf("nol", "satu", "dua", "tiga", "empat", "lima", "enam", "tujuh", "delapan",
@@ -102,7 +104,7 @@ object LocalCorrectionResolver {
         // A second negative, conjunction or intervening phrase is not resolved.
         val index = left.indexOfLast { it.value in negative }
         if (index < 0 || left.count { it.value in protectedNegative } != 1) return null
-        if (right.any { it.value in protectedNegative || it.value in setOf("atau", "or") }) return null
+        if (right.any { it.value in protectedNegative || it.value in orWords }) return null
         val predicate = left.drop(index + 1)
         if (predicate.size !in 1..4 || right.size < predicate.size ||
             predicate.any { it.value in subjectStops } || !contiguous(raw, left.drop(index)) ||
@@ -124,7 +126,7 @@ object LocalCorrectionResolver {
         val modifier = if (left[leftYang - 1].value == "sendiri") 1 else 0
         val subjectStart = leftYang - modifier - subject.size
         if (subjectStart < 0) return null
-        if (subjectStart > 0 && left[subjectStart - 1].value in setOf("dan", "atau", "and", "or")) return null
+        if (subjectStart > 0 && left[subjectStart - 1].value in conjunctions) return null
         if (left.subList(subjectStart, subjectStart + subject.size).map { it.value } != subject.map { it.value }) return null
         // Repeated mentions of that same subject make the intended anchor unclear.
         if (left.windowed(subject.size).count { words -> words.map { it.value } == subject.map { it.value } } != 1) return null

@@ -34,8 +34,9 @@ semantic cleanup disabled.
 
 The Q8 readable candidates, ONNX punctuation, SentencePiece and Qwen ASR runtimes
 are excluded from the personal release. ZIP/library and DEX checks confirm their
-absence. The baseline native cleanup library remains packaged but its generative
-cleanup feature is disabled; it is not an accepted formatter.
+absence. The baseline native cleanup library is no longer packaged in personal builds
+(benchmark builds only); its generative cleanup feature is disabled and it is
+not an accepted formatter.
 
 ## Verification
 

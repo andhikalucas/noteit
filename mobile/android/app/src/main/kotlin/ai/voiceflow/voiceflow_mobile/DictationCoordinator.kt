@@ -14,6 +14,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 /** Owns recording and delivery independently of a Flutter screen or overlay view. */
 class DictationCoordinator private constructor(context: Context) {
     companion object {
+        private val NOTE_SOURCE = Regex("note:[0-9]+")
         @Volatile private var instance: DictationCoordinator? = null
         fun get(context: Context): DictationCoordinator = instance ?: synchronized(this) {
             instance ?: DictationCoordinator(context.applicationContext).also { instance = it }
@@ -47,7 +48,7 @@ class DictationCoordinator private constructor(context: Context) {
     private val worker = Executors.newSingleThreadExecutor { r -> Thread(r, "noteit-sessions") }
     private val cleanupWorker = Executors.newSingleThreadExecutor { r -> Thread(r, "noteit-cleanup") }
     private val capture = AudioCapture()
-    private val cloud = GeminiTranscriber(app)
+    private val cloud = GeminiTranscriber(BuildConfig.GEMINI_API_KEY, UrlConnectionGeminiTransport())
     private val local = LocalTranscriber(app)
     @Volatile private var active: String? = null
     @Volatile private var benchmarking = false
@@ -71,7 +72,7 @@ class DictationCoordinator private constructor(context: Context) {
     @Synchronized
     fun start(source: String): Map<String, Any?> {
         if (isBusy()) throw DictationException("busy", "Finish the current recording or benchmark first.")
-        if (source != "bubble" && !source.matches(Regex("note:[0-9]+")))
+        if (source != "bubble" && !source.matches(NOTE_SOURCE))
             throw DictationException("source", "Open a note before recording.")
         if (sessions.values.any { it.source == source })
             throw DictationException("pending", "Retry or discard the previous recording first.")
@@ -84,7 +85,7 @@ class DictationCoordinator private constructor(context: Context) {
         try {
             if (options.engine == "local") s.pipeline = local.startSession(options) { s.cancelled.get() }
             persist(s)
-            capture.start(s.audio, onSamples = { s.pipeline?.accept(it) }, onFailure = {
+            capture.start(s.audio, onSamples = s.pipeline?.let { p -> { samples: ShortArray -> p.accept(samples) } }, onFailure = {
                 main.post { stop(id) }
             })
             notify(s)

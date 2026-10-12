@@ -46,7 +46,7 @@ object LocalCleanupModel {
                     onProgress(total.toDouble() / BYTES)
                 }
             } }
-            val actual = digest.digest().joinToString("") { "%02x".format(it) }
+            val actual = digest.digest().toHex()
             check(total == BYTES && actual == SHA256) { "Cleanup model checksum did not match." }
             if (cancelled()) throw DictationException("cancelled", "Download cancelled.")
             check(temporary.renameTo(target)) { "Could not install cleanup model." }
@@ -73,6 +73,9 @@ object LocalFormattingGuard {
     private val number = Regex("\\p{Nd}+(?:[.,:/-]\\p{Nd}+)*")
     private const val punctuation = ".,!?;:"
     private const val operators = "=<>|&"
+    private val invalidCharacterKinds = setOf(
+        Character.CONTROL.toInt(), Character.FORMAT.toInt(), Character.SURROGATE.toInt(),
+        Character.PRIVATE_USE.toInt(), Character.UNASSIGNED.toInt())
 
     private fun words(text: String) = word.findAll(text).map {
         it.value.lowercase(java.util.Locale.ROOT).replace('’', '\'')
@@ -105,9 +108,7 @@ object LocalFormattingGuard {
 
     internal fun structuralRejection(raw: String, candidate: String, ignoredWords: Set<String> = emptySet()): String? {
         if (candidate.codePoints().anyMatch {
-            it != 9 && it != 10 && it != 13 && Character.getType(it) in setOf(
-                Character.CONTROL.toInt(), Character.FORMAT.toInt(), Character.SURROGATE.toInt(),
-                Character.PRIVATE_USE.toInt(), Character.UNASSIGNED.toInt())
+            it != 9 && it != 10 && it != 13 && Character.getType(it) in invalidCharacterKinds
         }) return "invalid_character"
         if (number.findAll(raw).map { it.value }.toList() != number.findAll(candidate).map { it.value }.toList())
             return "numeric_structure_changed"
@@ -132,7 +133,7 @@ object LocalFormattingGuard {
                 val internal = Character.isLetterOrDigit(previous) && Character.isLetterOrDigit(next)
                 val operatorAdjacent = code.toChar() in "!:?" &&
                     ((previous >= 0 && previous.toChar() in operators) || (next >= 0 && next.toChar() in operators))
-                val editable = code in listOf(9, 10, 13, 32) ||
+                val editable = code == 9 || code == 10 || code == 13 || code == 32 ||
                     (code <= 127 && code.toChar() in punctuation && !internal && !operatorAdjacent)
                 if (!editable) result += anchor to code
                 position = nextPosition
@@ -303,10 +304,11 @@ class LocalCleanupWindow(private val retainedSentences: Int = 3) {
     init { require(retainedSentences in 1..8) }
     private val committed = StringBuilder()
     private var pending = ""
+    private companion object { val SENTENCE_BOUNDARY = Regex("(?<=[.!?])\\s+|\\n{2,}") }
     fun input(next: String) = if (pending.isBlank()) next else "$pending $next"
     fun accept(result: String) {
         pending = result
-        val boundaries = Regex("(?<=[.!?])\\s+|\\n{2,}").findAll(pending).toList()
+        val boundaries = SENTENCE_BOUNDARY.findAll(pending).toList()
         var end = if (boundaries.size >= retainedSentences) boundaries[boundaries.size - retainedSentences].range.last + 1 else 0
         if (pending.length - end > 3_000) {
             end = maxOf(end, pending.lastIndexOf(' ', pending.length - 2_000).coerceAtLeast(0))

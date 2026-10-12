@@ -2,7 +2,6 @@
 
 package ai.voiceflow.voiceflow_mobile
 
-import android.content.Context
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -19,9 +18,6 @@ class GeminiTranscriber internal constructor(
     private val transport: GeminiTransport,
     private val now: () -> Long = System::currentTimeMillis,
 ) : Transcriber {
-    @Suppress("UNUSED_PARAMETER")
-    constructor(context: Context) : this(BuildConfig.GEMINI_API_KEY, UrlConnectionGeminiTransport())
-
     override fun transcribe(audio: File, options: DictationOptions, cancelled: () -> Boolean): TranscriptionResult {
         checkCancelled(cancelled)
         if (apiKey.isBlank()) throw DictationException("missing_credentials", "Add your Gemini key and rebuild the app.")
@@ -132,7 +128,9 @@ class GeminiTranscriber internal constructor(
         var state = initialState
         var attempts = 0
         while (state == "PROCESSING" && attempts++ < 60) {
-            repeat(10) { checkCancelled(cancelled); Thread.sleep(100) }
+            // Poll quickly at first (short clips finish fast), then back off to 1 s.
+            val waitMs = if (attempts <= 4) 250 else 1000
+            repeat(waitMs / 50) { checkCancelled(cancelled); Thread.sleep(50) }
             val response = send("GET", "$BASE/v1beta/${upload.name}", cancelled)
             state = jsonResponse(response).optString("state")
         }
@@ -177,11 +175,12 @@ class GeminiTranscriber internal constructor(
     }
 
     private fun jsonResponse(response: GeminiResponse) = JSONObject(response.body)
-    private fun validName(name: String) = name.matches(Regex("files/[A-Za-z0-9_-]+"))
+    private fun validName(name: String) = name.matches(VALID_NAME)
     private data class UploadedAudio(val name: String, val uri: String, val createdAt: Long, val size: Long, val modifiedAt: Long)
 
     companion object {
         private const val BASE = "https://generativelanguage.googleapis.com"
+        private val VALID_NAME = Regex("files/[A-Za-z0-9_-]+")
         private const val UPLOAD_TTL_MS = 47L * 60 * 60 * 1000
 
         internal fun parseText(json: JSONObject): String {
@@ -223,6 +222,7 @@ internal class UrlConnectionGeminiTransport : GeminiTransport {
         checkCancelled(cancelled)
         val connection = URL(request.url).openConnection() as HttpURLConnection
         val finished = AtomicBoolean(false)
+        var clean = false
         val watcher = thread(name = "gemini-cancel", isDaemon = true) {
             while (!finished.get()) {
                 if (cancelled()) { connection.disconnect(); return@thread }
@@ -266,11 +266,15 @@ internal class UrlConnectionGeminiTransport : GeminiTransport {
             }
             checkCancelled(cancelled)
             val headers = connection.headerFields.filterKeys { it != null }.mapValues { it.value.firstOrNull().orEmpty() }
-            return GeminiResponse(status, bytes?.toString(Charsets.UTF_8).orEmpty(), headers)
+            val response = GeminiResponse(status, bytes?.toString(Charsets.UTF_8).orEmpty(), headers)
+            clean = true
+            return response
         } finally {
             finished.set(true)
             watcher.interrupt()
-            connection.disconnect()
+            // Streams are drained and closed above; leaving the socket connected lets
+            // HTTP keep-alive reuse it. Disconnect only after cancel or failure.
+            if (!clean) connection.disconnect()
         }
     }
 }

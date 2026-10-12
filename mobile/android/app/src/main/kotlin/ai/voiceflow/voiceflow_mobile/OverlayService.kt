@@ -44,11 +44,8 @@ class OverlayService : Service() {
 
     companion object {
         const val ACTION_START = "ai.voiceflow.START"
-        const val ACTION_STOP = "ai.voiceflow.STOP"
         const val PREFS = "vf_overlay"
-        const val KEY_LOCALE = "locale"
-        const val KEY_ENGINE = "stt_engine"   // "whisper" | "google"
-        const val KEY_MODEL = "whisper_model" // "tiny" | "base" | "small"
+        const val KEY_ENGINE = "stt_engine"   // legacy "whisper" | "local" | "gemini"; see DictationSettings.load
         private const val KEY_X = "bubble_x"
         private const val KEY_Y = "bubble_y"
         private const val CHANNEL_ID = "voiceflow_bubble"
@@ -92,15 +89,11 @@ class OverlayService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (intent?.action == ACTION_STOP) {
-            stopSelf()
-            return START_NOT_STICKY
-        }
         startAsForeground()
         if (bubble == null) addBubble()
         running = true
         coordinator.pending("bubble").lastOrNull()?.let { updateSession(it) }
-        if (DictationSettings.load(this).engine == "local") thread { WhisperEngine.warmUp(applicationContext, "small") }
+        if (DictationSettings.load(this).engine == "local") thread { WhisperEngine.warmUp(applicationContext, LocalCandidatePolicy.model) }
         return START_STICKY
     }
 

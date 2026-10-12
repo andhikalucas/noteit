@@ -16,11 +16,10 @@ class AudioCapture {
     private var worker: Thread? = null
     private var recorder: AudioRecord? = null
     @Volatile private var failure: Exception? = null
-    val isRecording: Boolean get() = recording.get()
 
     @SuppressLint("MissingPermission")
     @Synchronized
-    fun start(file: File, onSamples: (ShortArray) -> Unit = {}, onFailure: () -> Unit = {}) {
+    fun start(file: File, onSamples: ((ShortArray) -> Unit)? = null, onFailure: () -> Unit = {}) {
         check(worker == null) { "Recording is already active" }
         val min = AudioRecord.getMinBufferSize(SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO,
             AudioFormat.ENCODING_PCM_16BIT)
@@ -57,7 +56,8 @@ class AudioCapture {
                     }
                     output.write(encoded, 0, count * 2)
                     bytes += count * 2
-                    onSamples(buffer.copyOf(count))
+                    // Copy only when someone consumes samples (local pipeline), not for Gemini.
+                    onSamples?.invoke(buffer.copyOf(count))
                 }
             } catch (e: Exception) {
                 failure = e

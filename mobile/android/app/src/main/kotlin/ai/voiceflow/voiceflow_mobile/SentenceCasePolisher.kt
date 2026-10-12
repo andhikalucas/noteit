@@ -14,6 +14,10 @@ object SentenceCasePolisher {
     private val domain = Regex("(?:[\\p{L}\\p{N}_-]+\\.)+[\\p{L}\\p{N}_-]+")
     private val operatorLine = Regex("(?m)^.*(?:==|!=|<=|>=|:=|=>|->|\\+=|-=|\\*=|/=|=).*$")
     private val commandLine = Regex("(?im)^[ \\t]*(?:git|curl|wget|npm|npx|pip|python|python3|adb|gradle|flutter|dart|sudo|rm|mkdir|cd|ls)[ \\t]+[^\\r\\n]*$")
+    private val unmatchedDelimiter = Regex("[\"“‘`]|(?<![\\p{L}\\p{N}])'")
+    private val initialism = Regex("(?:\\p{L}\\.)+\\p{L}?\\.?")
+    private val invalidKinds = setOf(
+        Character.CONTROL.toInt(), Character.FORMAT.toInt(), Character.PRIVATE_USE.toInt(), Character.UNASSIGNED.toInt())
     private val codeCharacters = "_/@\\=<>|&+#{}[]()".toSet()
     private val abbreviations = ("dr mr mrs ms prof sr jr st vs etc e.g i.e cf approx fig no nos " +
         "inc ltd co dept est jan feb mar apr jun jul aug sep sept oct nov dec " +
@@ -40,7 +44,7 @@ object SentenceCasePolisher {
         // Quotes can span lines. An unmatched delimiter protects the entire
         // remaining source, not just the first line of an ambiguous literal.
         // Apostrophes inside contractions are not opening quotes.
-        Regex("[\"“‘`]|(?<![\\p{L}\\p{N}])'").findAll(raw).forEach { match ->
+        unmatchedDelimiter.findAll(raw).forEach { match ->
             if (protectedSpans.none { match.range.first in it.begin until it.end }) {
                 protectedSpans.add(Span(match.range.first, raw.length))
             }
@@ -51,7 +55,7 @@ object SentenceCasePolisher {
             val core = text.trimEnd('.', '!', '?')
             return core.lowercase(Locale.ROOT) in abbreviations ||
                 core.codePointCount(0, core.length) == 1 ||
-                Regex("(?:\\p{L}\\.)+\\p{L}?\\.?").matches(text)
+                initialism.matches(text)
         }
         fun safeWord(span: Span): Boolean {
             val text = raw.substring(span.begin, span.end)
@@ -124,8 +128,7 @@ object SentenceCasePolisher {
         while (index < raw.length) {
             val cp = raw.codePointAt(index)
             val kind = Character.getType(cp)
-            if (cp in 0xD800..0xDFFF || cp !in listOf(9, 10, 13) && kind in listOf(
-                    Character.CONTROL.toInt(), Character.FORMAT.toInt(), Character.PRIVATE_USE.toInt(), Character.UNASSIGNED.toInt())) return false
+            if (cp in 0xD800..0xDFFF || cp != 9 && cp != 10 && cp != 13 && kind in invalidKinds) return false
             index += Character.charCount(cp)
         }
         return true

@@ -25,6 +25,7 @@ object DictationSettings {
         val prefs = context.getSharedPreferences(OverlayService.PREFS, Context.MODE_PRIVATE)
         val raw = prefs.getString(KEY, null)
         if (raw == null) {
+            // Legacy native vf_overlay "stt_engine" migration; remove once the personal install has saved settings once from the current build.
             val legacy = prefs.getString(OverlayService.KEY_ENGINE, "gemini")
             return DictationOptions(engine = if (legacy == "whisper" || legacy == "local") "local" else "gemini")
         }

@@ -46,11 +46,6 @@ object WhisperEngine {
 
     val available: Boolean get() = WhisperNative.available
 
-    private fun threads(): Int {
-        val cores = Runtime.getRuntime().availableProcessors()
-        return (cores / 2).coerceIn(2, 8)
-    }
-
     /** True once a usable model for [size] is on disk. */
     fun modelReady(context: Context, size: String): Boolean =
         ModelStore.isDownloaded(context, size)
@@ -101,26 +96,6 @@ object WhisperEngine {
         val a = maxOf(0, first - pad) * frame
         val b = minOf(s.size, (last + 1 + pad) * frame)
         return if (a == 0 && b == s.size) s else s.copyOfRange(a, b)
-    }
-
-    /**
-     * Transcribes [samples] (16 kHz mono float) with the model for [size].
-     * Returns text, or null if the model isn't downloaded / the engine failed.
-     */
-    fun transcribe(
-        context: Context,
-        size: String,
-        samples: FloatArray,
-        lang: String?,
-        prompt: String?,
-    ): String? {
-        if (!WhisperNative.available) return null
-        val model = ModelStore.modelFile(context, size)
-        if (!model.exists()) return null
-
-        return recognize(context, trimSilence(samples),
-            LocalRecognitionConfig(size, threads(), language = lang ?: "auto"), prompt,
-        )?.text
     }
 
     /** No trimming here: sample positions must remain stable for overlap. */
