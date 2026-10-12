@@ -37,7 +37,7 @@ class NotesProvider extends ChangeNotifier {
   Future<void> refresh() async {
     final version = ++_refreshVersion;
     try {
-      final loaded = await repo.all(query: query, sort: sort);
+      final loaded = await repo.listPreviews(query: query, sort: sort);
       if (version != _refreshVersion) return;
       notes = loaded;
       refreshError = null;
@@ -70,7 +70,14 @@ class NotesProvider extends ChangeNotifier {
     return note;
   }
 
+  /// Loads the complete note (list rows carry only a body preview).
+  Future<Note?> loadFull(int id) => repo.byId(id);
+
   Future<Note> save(Note note, {String? title, String? body}) async {
+    // A list preview must never overwrite the stored body.
+    if (note.partial && body == null) {
+      throw StateError('Cannot save a note with a truncated body');
+    }
     final updated = note.copyWith(
       title: title,
       body: body,
@@ -82,8 +89,16 @@ class NotesProvider extends ChangeNotifier {
   }
 
   Future<void> delete(Note note) async {
+    // Undo restores from this snapshot, so it must hold the complete body.
+    var snapshot = note;
+    if (note.partial) {
+      snapshot = await repo.byId(note.id!) ?? note;
+      if (snapshot.partial) {
+        throw StateError('Cannot delete a note without its full body');
+      }
+    }
     await repo.delete(note.id!);
-    _lastDeleted = note;
+    _lastDeleted = snapshot;
     undoError = null;
     await refresh();
   }

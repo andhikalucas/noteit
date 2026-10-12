@@ -6,6 +6,23 @@ import '../models/note_view.dart';
 
 /// SQLite-backed note storage. A [DatabaseFactory] can be injected so unit
 /// tests run against sqflite_common_ffi without an emulator.
+bool _endsWithWhitespace(String s) {
+  if (s.isEmpty) return false;
+  final c = s.codeUnitAt(s.length - 1);
+  return c == 0x20 ||
+      (c >= 0x09 && c <= 0x0D) ||
+      c == 0xA0 ||
+      c == 0x85 ||
+      c == 0x1680 ||
+      (c >= 0x2000 && c <= 0x200A) ||
+      c == 0x2028 ||
+      c == 0x2029 ||
+      c == 0x202F ||
+      c == 0x205F ||
+      c == 0x3000 ||
+      c == 0xFEFF;
+}
+
 class NotesRepository {
   final DatabaseFactory _factory;
   final String? _overridePath;
@@ -57,9 +74,38 @@ class NotesRepository {
     return _db!;
   }
 
+  /// Full notes (complete bodies).
   Future<List<Note>> all({
     String query = '',
     NoteSort sort = NoteSort.updated,
+  }) => _list(query, sort, preview: false);
+
+  /// Same filter and ordering as [all], but bodies are cut to the first
+  /// [previewLength] characters and the notes are flagged [Note.partial] when
+  /// something was cut. Use [byId] to load the full note before editing.
+  Future<List<Note>> listPreviews({
+    String query = '',
+    NoteSort sort = NoteSort.updated,
+  }) => _list(query, sort, preview: true);
+
+  static const previewLength = 400;
+
+  /// The complete note, or null if it no longer exists.
+  Future<Note?> byId(int id) async {
+    final db = await _open();
+    final rows = await db.query(
+      'notes',
+      where: 'id = ?',
+      whereArgs: [id],
+      limit: 1,
+    );
+    return rows.isEmpty ? null : Note.fromMap(rows.single);
+  }
+
+  Future<List<Note>> _list(
+    String query,
+    NoteSort sort, {
+    required bool preview,
   }) async {
     final db = await _open();
     final q = query.trim();
@@ -68,10 +114,21 @@ class NotesRepository {
     final orderBy = sort == NoteSort.created
         ? 'created_at DESC'
         : 'updated_at DESC';
+    final columns = preview
+        ? const [
+            'id',
+            'title',
+            'created_at',
+            'updated_at',
+            'substr(body, 1, $previewLength) AS body',
+            'length(body) > $previewLength AS partial',
+          ]
+        : null;
     final rows = q.isEmpty
-        ? await db.query('notes', orderBy: orderBy)
+        ? await db.query('notes', columns: columns, orderBy: orderBy)
         : await db.query(
             'notes',
+            columns: columns,
             where: 'title LIKE ? OR body LIKE ?',
             whereArgs: ['%$q%', '%$q%'],
             orderBy: orderBy,
@@ -94,6 +151,9 @@ class NotesRepository {
   }
 
   Future<void> update(Note note) async {
+    if (note.partial) {
+      throw StateError('Refusing to save a truncated note body');
+    }
     final db = await _open();
     await db.update(
       'notes',
@@ -129,7 +189,7 @@ class NotesRepository {
         whereArgs: [sessionId],
       );
       if (receipt.isNotEmpty) return note;
-      final separator = note.body.isEmpty || RegExp(r'\s$').hasMatch(note.body)
+      final separator = note.body.isEmpty || _endsWithWhitespace(note.body)
           ? ''
           : '\n\n';
       final updated = note.copyWith(

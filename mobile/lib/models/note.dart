@@ -1,9 +1,16 @@
 class Note {
+  static const _snippetMax = 300;
+  static const _snippetScan = 1000;
+
   final int? id;
   final String title;
   final String body;
   final DateTime createdAt;
   final DateTime updatedAt;
+
+  /// True when [body] is only a leading preview from a list query. A partial
+  /// note must never be written back to storage.
+  final bool partial;
 
   const Note({
     this.id,
@@ -11,6 +18,7 @@ class Note {
     required this.body,
     required this.createdAt,
     required this.updatedAt,
+    this.partial = false,
   });
 
   /// The heading shown in lists and the editor. Uses the explicit [title] when
@@ -31,17 +39,24 @@ class Note {
   String get snippet {
     final hasTitle = title.trim().isNotEmpty;
     var skipTitleLine = !hasTitle;
-    final rest = <String>[];
-    for (final line in body.split('\n')) {
+    // Previews never need more than the start of a (possibly huge) body.
+    final head = body.length > _snippetScan
+        ? body.substring(0, _snippetScan)
+        : body;
+    final rest = StringBuffer();
+    for (final line in head.split('\n')) {
       final s = line.trim();
       if (s.isEmpty) continue;
       if (skipTitleLine) {
         skipTitleLine = false;
         continue;
       }
-      rest.add(s);
+      if (rest.isNotEmpty) rest.write(' ');
+      rest.write(s);
+      if (rest.length >= _snippetMax) break;
     }
-    return rest.join(' ');
+    final out = rest.toString();
+    return out.length > _snippetMax ? out.substring(0, _snippetMax) : out;
   }
 
   Note copyWith({
@@ -56,6 +71,7 @@ class Note {
         body: body ?? this.body,
         createdAt: createdAt,
         updatedAt: updatedAt ?? this.updatedAt,
+        partial: body == null ? partial : false,
       );
 
   Map<String, Object?> toMap() => {
@@ -74,5 +90,6 @@ class Note {
             DateTime.fromMillisecondsSinceEpoch(m['created_at'] as int),
         updatedAt:
             DateTime.fromMillisecondsSinceEpoch(m['updated_at'] as int),
+        partial: (m['partial'] as int? ?? 0) == 1,
       );
 }

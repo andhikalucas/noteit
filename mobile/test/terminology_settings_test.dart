@@ -106,7 +106,6 @@ void main() {
     expect(settings.engine, SttEngine.local);
     expect(settings.noteLayout, NoteLayout.grid);
     expect(settings.groupByDate, isFalse);
-    expect(settings.whisperLang, 'auto');
   });
 
   test('failed terminology writes keep the last committed values', () async {

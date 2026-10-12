@@ -11,7 +11,6 @@ import 'package:flutter/material.dart';
 class VfTokens extends ThemeExtension<VfTokens> {
   final Color ink; // all text on canvas
   final Color canvas; // page background
-  final Color surfaceSoft; // soft tiles, unavailable-states
   final Color hairline; // 1px borders, dividers
   final Color pillBg; // primary pill surface
   final Color pillFg; // primary pill label
@@ -19,16 +18,12 @@ class VfTokens extends ThemeExtension<VfTokens> {
   // Pastel blocks — identical in both modes, always black ink on top.
   static const lime = Color(0xFFD6F655); // active listening
   static const lilac = Color(0xFFDAD0F7); // onboarding / explainer
-  static const cream = Color(0xFFF6F0E4);
-  static const mint = Color(0xFFCFF5E4);
   static const coral = Color(0xFFFF8577); // error states
-  static const navy = Color(0xFF242B66);
   static const onBlock = Color(0xFF000000); // ink on any pastel block
 
   const VfTokens({
     required this.ink,
     required this.canvas,
-    required this.surfaceSoft,
     required this.hairline,
     required this.pillBg,
     required this.pillFg,
@@ -37,7 +32,6 @@ class VfTokens extends ThemeExtension<VfTokens> {
   static const light = VfTokens(
     ink: Color(0xFF000000),
     canvas: Color(0xFFFFFFFF),
-    surfaceSoft: Color(0xFFF5F5F5),
     hairline: Color(0xFFE6E6E6),
     pillBg: Color(0xFF000000),
     pillFg: Color(0xFFFFFFFF),
@@ -46,7 +40,6 @@ class VfTokens extends ThemeExtension<VfTokens> {
   static const dark = VfTokens(
     ink: Color(0xFFFFFFFF),
     canvas: Color(0xFF101014),
-    surfaceSoft: Color(0xFF1B1B20),
     hairline: Color(0xFF2E2E34),
     pillBg: Color(0xFFFFFFFF), // primary pill inverts on dark canvas
     pillFg: Color(0xFF000000),
@@ -56,7 +49,6 @@ class VfTokens extends ThemeExtension<VfTokens> {
   VfTokens copyWith({
     Color? ink,
     Color? canvas,
-    Color? surfaceSoft,
     Color? hairline,
     Color? pillBg,
     Color? pillFg,
@@ -64,7 +56,6 @@ class VfTokens extends ThemeExtension<VfTokens> {
       VfTokens(
         ink: ink ?? this.ink,
         canvas: canvas ?? this.canvas,
-        surfaceSoft: surfaceSoft ?? this.surfaceSoft,
         hairline: hairline ?? this.hairline,
         pillBg: pillBg ?? this.pillBg,
         pillFg: pillFg ?? this.pillFg,
@@ -76,7 +67,6 @@ class VfTokens extends ThemeExtension<VfTokens> {
     return VfTokens(
       ink: Color.lerp(ink, other.ink, t)!,
       canvas: Color.lerp(canvas, other.canvas, t)!,
-      surfaceSoft: Color.lerp(surfaceSoft, other.surfaceSoft, t)!,
       hairline: Color.lerp(hairline, other.hairline, t)!,
       pillBg: Color.lerp(pillBg, other.pillBg, t)!,
       pillFg: Color.lerp(pillFg, other.pillFg, t)!,
@@ -115,15 +105,15 @@ ThemeData vfTheme(Brightness brightness) {
   const sans = VfType.sans;
   final text = TextTheme(
     headlineMedium: const TextStyle(
-        fontFamily: sans, fontSize: 26, fontWeight: FontWeight.w600, letterSpacing: -0.26),
+        fontSize: 26, fontWeight: FontWeight.w600, letterSpacing: -0.26),
     titleMedium: const TextStyle(
-        fontFamily: sans, fontSize: 18, fontWeight: FontWeight.w600, letterSpacing: -0.2),
+        fontSize: 18, fontWeight: FontWeight.w600, letterSpacing: -0.2),
     bodyLarge: const TextStyle(
-        fontFamily: sans, fontSize: 18, fontWeight: FontWeight.w400, letterSpacing: -0.26, height: 1.45),
+        fontSize: 18, fontWeight: FontWeight.w400, letterSpacing: -0.26, height: 1.45),
     bodyMedium: const TextStyle(
-        fontFamily: sans, fontSize: 16, fontWeight: FontWeight.w400, letterSpacing: -0.14, height: 1.45),
+        fontSize: 16, fontWeight: FontWeight.w400, letterSpacing: -0.14, height: 1.45),
     labelLarge: const TextStyle(
-        fontFamily: sans, fontSize: 16, fontWeight: FontWeight.w600, letterSpacing: -0.1),
+        fontSize: 16, fontWeight: FontWeight.w600, letterSpacing: -0.1),
   ).apply(bodyColor: t.ink, displayColor: t.ink, fontFamily: sans);
 
   final base = ThemeData(

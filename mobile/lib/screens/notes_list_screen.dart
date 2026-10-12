@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:phosphor_icons/phosphor_icons.dart';
 import 'package:provider/provider.dart';
@@ -20,6 +22,7 @@ class NotesListScreen extends StatefulWidget {
 
 class _NotesListScreenState extends State<NotesListScreen> {
   final _searchCtl = TextEditingController();
+  Timer? _searchDebounce;
 
   @override
   void initState() {
@@ -34,20 +37,60 @@ class _NotesListScreenState extends State<NotesListScreen> {
 
   @override
   void dispose() {
+    _searchDebounce?.cancel();
     _searchCtl.dispose();
     super.dispose();
   }
 
+  void _onSearchChanged(String text) {
+    _searchDebounce?.cancel();
+    final provider = context.read<NotesProvider>();
+    if (text.isEmpty) {
+      provider.search('');
+      return;
+    }
+    _searchDebounce = Timer(const Duration(milliseconds: 250), () {
+      if (mounted) provider.search(text);
+    });
+  }
+
+  void _clearSearch() {
+    _searchDebounce?.cancel();
+    _searchCtl.clear();
+    context.read<NotesProvider>().search('');
+  }
+
   Future<void> _openEditor(Note? note, {bool dictate = false}) async {
-    await Navigator.of(context).push(
+    final provider = context.read<NotesProvider>();
+    final messenger = ScaffoldMessenger.of(context);
+    final navigator = Navigator.of(context);
+    var full = note;
+    // List rows only carry a body preview; the editor needs the whole note
+    // (it saves whatever it holds).
+    if (note != null && note.partial && note.id != null) {
+      try {
+        full = await provider.loadFull(note.id!) ?? note;
+      } catch (_) {
+        full = note;
+      }
+      if (!mounted) return;
+      if (full.partial) {
+        messenger.showSnackBar(
+          const SnackBar(content: Text('Could not open note. Try again.')),
+        );
+        return;
+      }
+    }
+    await navigator.push(
       MaterialPageRoute(
-        builder: (_) => NoteEditorScreen(note: note, startDictating: dictate),
+        builder: (_) => NoteEditorScreen(note: full, startDictating: dictate),
       ),
     );
   }
 
   void _onMenu(String value) {
     final settings = context.read<SettingsService>();
+    final provider = context.read<NotesProvider>();
     switch (value) {
       case 'view_list':
         settings.noteLayout = NoteLayout.list;
@@ -56,24 +99,52 @@ class _NotesListScreenState extends State<NotesListScreen> {
       case 'group':
         settings.groupByDate = !settings.groupByDate;
       case 'sort_updated':
-        settings.noteSort = NoteSort.updated;
-        context.read<NotesProvider>().setSort(NoteSort.updated);
+        _setSort(provider, settings, NoteSort.updated);
       case 'sort_created':
-        settings.noteSort = NoteSort.created;
-        context.read<NotesProvider>().setSort(NoteSort.created);
+        _setSort(provider, settings, NoteSort.created);
       case 'sort_title':
-        settings.noteSort = NoteSort.title;
-        context.read<NotesProvider>().setSort(NoteSort.title);
+        _setSort(provider, settings, NoteSort.title);
     }
+  }
+
+  // The provider owns the refresh; the settings setter is a no-op when the
+  // value is unchanged, so this triggers exactly one list read.
+  void _setSort(
+    NotesProvider provider,
+    SettingsService settings,
+    NoteSort sort,
+  ) {
+    provider.setSort(sort);
+    settings.noteSort = sort;
   }
 
   @override
   Widget build(BuildContext context) {
-    final provider = context.watch<NotesProvider>();
-    final settings = context.watch<SettingsService>();
-    final sections = settings.groupByDate
-        ? groupNotes(provider.notes, provider.sort)
-        : [NoteSection('', provider.notes)];
+    final provider = context.read<NotesProvider>();
+    final layout = context.select<SettingsService, NoteLayout>(
+      (s) => s.noteLayout,
+    );
+    final menuSort = context.select<SettingsService, NoteSort>(
+      (s) => s.noteSort,
+    );
+    final groupByDate = context.select<SettingsService, bool>(
+      (s) => s.groupByDate,
+    );
+    final notes = context.select<NotesProvider, List<Note>>((p) => p.notes);
+    final sort = context.select<NotesProvider, NoteSort>((p) => p.sort);
+    final query = context.select<NotesProvider, String>((p) => p.query);
+    final refreshError = context.select<NotesProvider, String?>(
+      (p) => p.refreshError,
+    );
+    final undoError = context.select<NotesProvider, String?>(
+      (p) => p.undoError,
+    );
+    final canRetryUndo = context.select<NotesProvider, bool>(
+      (p) => p.canRetryUndo,
+    );
+    final sections = groupByDate
+        ? groupNotes(notes, sort)
+        : [NoteSection('', notes)];
 
     return Scaffold(
       appBar: AppBar(
@@ -87,9 +158,9 @@ class _NotesListScreenState extends State<NotesListScreen> {
             ).push(MaterialPageRoute(builder: (_) => const SettingsScreen())),
           ),
           _ViewMenu(
-            layout: settings.noteLayout,
-            sort: settings.noteSort,
-            groupByDate: settings.groupByDate,
+            layout: layout,
+            sort: menuSort,
+            groupByDate: groupByDate,
             onSelected: _onMenu,
           ),
         ],
@@ -100,7 +171,7 @@ class _NotesListScreenState extends State<NotesListScreen> {
           builder: (context, constraints) {
             final minimumHeight = MediaQuery.textScalerOf(
               context,
-            ).scale(provider.undoError == null ? 160 : 260);
+            ).scale(undoError == null ? 160 : 260);
             return SingleChildScrollView(
               child: SizedBox(
                 height: constraints.maxHeight < minimumHeight
@@ -112,38 +183,35 @@ class _NotesListScreenState extends State<NotesListScreen> {
                       padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
                       child: TextField(
                         controller: _searchCtl,
-                        onChanged: provider.search,
+                        onChanged: _onSearchChanged,
                         decoration: InputDecoration(
                           hintText: 'Search notes',
                           prefixIcon: const Icon(
                             PhosphorIconsRegular.magnifyingGlass,
                             size: 20,
                           ),
-                          suffixIcon: provider.query.isEmpty
+                          suffixIcon: query.isEmpty
                               ? null
                               : IconButton(
                                   icon: const Icon(
                                     PhosphorIconsRegular.x,
                                     size: 18,
                                   ),
-                                  onPressed: () {
-                                    _searchCtl.clear();
-                                    provider.search('');
-                                  },
+                                  onPressed: _clearSearch,
                                 ),
                         ),
                       ),
                     ),
-                    if (provider.undoError != null)
+                    if (undoError != null)
                       Padding(
                         padding: const EdgeInsets.symmetric(horizontal: 16),
                         child: Wrap(
                           spacing: 12,
                           crossAxisAlignment: WrapCrossAlignment.center,
                           children: [
-                            Text(provider.undoError!),
+                            Text(undoError),
                             TextButton(
-                              onPressed: provider.canRetryUndo
+                              onPressed: canRetryUndo
                                   ? () async {
                                       try {
                                         await provider.undoDelete();
@@ -158,11 +226,11 @@ class _NotesListScreenState extends State<NotesListScreen> {
                         ),
                       ),
                     Expanded(
-                      child: provider.refreshError != null
+                      child: refreshError != null
                           ? ListView(
                               padding: const EdgeInsets.all(16),
                               children: [
-                                Text(provider.refreshError!),
+                                Text(refreshError),
                                 Align(
                                   alignment: Alignment.centerLeft,
                                   child: TextButton(
@@ -172,14 +240,11 @@ class _NotesListScreenState extends State<NotesListScreen> {
                                 ),
                               ],
                             )
-                          : provider.notes.isEmpty
-                          ? _EmptyState(searching: provider.query.isNotEmpty)
+                          : notes.isEmpty
+                          ? _EmptyState(searching: query.isNotEmpty)
                           : CustomScrollView(
                               slivers: [
-                                ..._sectionSlivers(
-                                  sections,
-                                  settings.noteLayout,
-                                ),
+                                ..._sectionSlivers(sections, layout),
                                 const SliverToBoxAdapter(
                                   child: SizedBox(height: 16),
                                 ),
@@ -365,6 +430,8 @@ class _NoteCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final text = Theme.of(context).textTheme;
+    final title = note.displayTitle;
+    final snippet = note.snippet;
     return InkWell(
       onTap: onTap,
       borderRadius: BorderRadius.circular(VfRadius.lg),
@@ -374,16 +441,16 @@ class _NoteCard extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              note.displayTitle,
+              title,
               maxLines: 2,
               overflow: TextOverflow.ellipsis,
               style: text.titleMedium,
             ),
-            if (note.snippet.isNotEmpty) ...[
+            if (snippet.isNotEmpty) ...[
               const SizedBox(height: 6),
               Expanded(
                 child: Text(
-                  note.snippet,
+                  snippet,
                   maxLines: 5,
                   overflow: TextOverflow.ellipsis,
                   style: text.bodyMedium?.copyWith(fontWeight: FontWeight.w300),

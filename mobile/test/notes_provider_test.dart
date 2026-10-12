@@ -27,8 +27,17 @@ class _Repository extends NotesRepository {
   Completer<List<Note>>? nextRead;
   int nextId = 10;
 
+  /// When set, list reads return bodies cut to this many characters.
+  int? previewLimit;
+
   @override
-  Future<List<Note>> all({
+  Future<Note?> byId(int id) async {
+    final index = stored.indexWhere((note) => note.id == id);
+    return index < 0 ? null : stored[index];
+  }
+
+  @override
+  Future<List<Note>> listPreviews({
     String query = '',
     NoteSort sort = NoteSort.updated,
   }) async {
@@ -37,7 +46,22 @@ class _Repository extends NotesRepository {
     nextRead = null;
     if (gate != null) return gate.future;
     if (failRead) throw StateError('Read unavailable');
-    return stored.where((note) => note.body.contains(query)).toList();
+    final rows = stored.where((note) => note.body.contains(query));
+    final limit = previewLimit;
+    if (limit == null) return rows.toList();
+    return [
+      for (final note in rows)
+        note.body.length <= limit
+            ? note
+            : Note(
+                id: note.id,
+                title: note.title,
+                body: note.body.substring(0, limit),
+                createdAt: note.createdAt,
+                updatedAt: note.updatedAt,
+                partial: true,
+              ),
+    ];
   }
 
   @override
@@ -160,6 +184,42 @@ void main() {
       expect(repo.insertInputs, hasLength(1));
     },
   );
+
+  test('list refresh carries truncated bodies; loadFull returns the whole note',
+      () async {
+    repo.stored.add(_note(1, 'A long body that is cut'));
+    repo.previewLimit = 6;
+    await notes.refresh();
+    final listed = notes.notes.single;
+    expect(listed.body, 'A long');
+    expect(listed.partial, isTrue);
+    final full = await notes.loadFull(1);
+    expect(full!.body, 'A long body that is cut');
+    expect(full.partial, isFalse);
+    expect(await notes.loadFull(99), isNull);
+  });
+
+  test('a truncated list note can never be saved back', () async {
+    repo.stored.add(_note(1, 'A long body that is cut'));
+    repo.previewLimit = 6;
+    await notes.refresh();
+    final listed = notes.notes.single;
+    await expectLater(notes.save(listed, title: 'New'), throwsStateError);
+    expect(repo.stored.single.body, 'A long body that is cut');
+    // Supplying a complete body explicitly is still allowed.
+    final saved = await notes.save(listed, body: 'Replaced');
+    expect(saved.partial, isFalse);
+    expect(repo.stored.single.body, 'Replaced');
+  });
+
+  test('deleting a truncated list note keeps the full body for Undo', () async {
+    repo.stored.add(_note(1, 'A long body that is cut'));
+    repo.previewLimit = 6;
+    await notes.refresh();
+    await notes.delete(notes.notes.single);
+    await notes.undoDelete();
+    expect(repo.stored.single.body, 'A long body that is cut');
+  });
 
   test(
     'failed deletion leaves the previous successful Undo target intact',

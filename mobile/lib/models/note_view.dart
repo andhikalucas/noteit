@@ -60,11 +60,13 @@ List<NoteSection> groupNotes(List<Note> notes, NoteSort sort, {DateTime? now}) {
   return [for (final l in order) NoteSection(l, byLabel[l]!)];
 }
 
+final _asciiLetter = RegExp(r'[A-Z]');
+
 String _letterBucket(String title) {
   final t = title.trim();
   if (t.isEmpty) return '#';
   final c = t[0].toUpperCase();
-  return RegExp(r'[A-Z]').hasMatch(c) ? c : '#';
+  return _asciiLetter.hasMatch(c) ? c : '#';
 }
 
 const _months = [

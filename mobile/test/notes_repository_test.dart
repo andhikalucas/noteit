@@ -51,6 +51,73 @@ void main() {
     expect(all.last.id, old.id);
   });
 
+  test('byId returns the full note, or null when missing', () async {
+    final long = 'x' * 1000;
+    final saved = await repo.insert(fresh(long));
+    final loaded = await repo.byId(saved.id!);
+    expect(loaded!.body, long);
+    expect(loaded.partial, isFalse);
+    expect(await repo.byId(saved.id! + 1), isNull);
+  });
+
+  test('listPreviews truncates long bodies and flags them partial', () async {
+    final long = 'y' * 1000;
+    await repo.insert(fresh(long));
+    await repo.insert(fresh('short'));
+    final previews = await repo.listPreviews();
+    final byBody = {for (final n in previews) n.body.length: n};
+    expect(byBody[NotesRepository.previewLength]!.partial, isTrue);
+    expect(byBody[5]!.partial, isFalse);
+    expect(byBody[5]!.body, 'short');
+  });
+
+  test('listPreviews searches the whole body and keeps ordering', () async {
+    final tail = '${'z' * 900} needle';
+    await repo.insert(
+      Note(
+        title: 'Old',
+        body: tail,
+        createdAt: DateTime(2026, 1, 1),
+        updatedAt: DateTime(2026, 1, 1),
+      ),
+    );
+    await repo.insert(
+      Note(
+        title: 'New',
+        body: 'other',
+        createdAt: DateTime(2026, 6, 1),
+        updatedAt: DateTime(2026, 6, 1),
+      ),
+    );
+    final hits = await repo.listPreviews(query: 'needle');
+    expect(hits.map((n) => n.title), ['Old']);
+    expect(hits.single.partial, isTrue);
+    final ordered = await repo.listPreviews();
+    expect(ordered.map((n) => n.title), ['New', 'Old']);
+    final byTitle = await repo.listPreviews(sort: NoteSort.title);
+    expect(byTitle.map((n) => n.title), ['New', 'Old']);
+  });
+
+  test('update refuses a truncated note so the stored body is kept', () async {
+    final long = 'q' * 1000;
+    final saved = await repo.insert(fresh(long));
+    final preview = (await repo.listPreviews()).single;
+    expect(preview.partial, isTrue);
+    await expectLater(
+      repo.update(preview.copyWith(title: 'Renamed')),
+      throwsStateError,
+    );
+    expect((await repo.byId(saved.id!))!.body, long);
+  });
+
+  test('appendTranscript appends to the full stored body', () async {
+    final long = 'w' * 1000;
+    final saved = await repo.insert(fresh(long));
+    final updated = await repo.appendTranscript(saved.id!, 's1', 'tail');
+    expect(updated!.body, '$long\n\ntail');
+    expect((await repo.byId(saved.id!))!.body, '$long\n\ntail');
+  });
+
   test('update persists new body', () async {
     final saved = await repo.insert(fresh('draft'));
     await repo.update(saved.copyWith(body: 'final', updatedAt: DateTime.now()));

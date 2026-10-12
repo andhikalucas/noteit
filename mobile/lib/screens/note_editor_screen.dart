@@ -306,17 +306,22 @@ class _NoteEditorScreenState extends State<NoteEditorScreen>
     });
   }
 
+  String _dictateLabel(SpeechService speech) {
+    if (_applying || _closing) return 'Saving...';
+    if (_connecting) return 'Loading...';
+    if (speech.transcribing) return 'Transcribing...';
+    if (_starting) return 'Starting...';
+    if (speech.listening) return 'Stop recording';
+    return 'Dictate';
+  }
+
   @override
   Widget build(BuildContext context) {
-    final speech = context.watch<SpeechService>();
-    final session = speech.session;
-    final busy =
-        speech.transcribing ||
-        _applying ||
-        _starting ||
-        _connecting ||
-        _closing ||
-        _connectionError != null;
+    // Only the layout height depends on the session here; the failure panel
+    // and dictate row listen to SpeechService on their own.
+    final sessionFailed = context.select<SpeechService, bool>(
+      (s) => s.session?.failed == true,
+    );
     return PopScope<void>(
       canPop: _allowPop,
       onPopInvokedWithResult: (didPop, _) {
@@ -349,7 +354,7 @@ class _NoteEditorScreenState extends State<NoteEditorScreen>
             builder: (context, constraints) {
               final minimumHeight = MediaQuery.textScalerOf(context).scale(
                 340 +
-                    (session?.failed == true ? 140 : 0) +
+                    (sessionFailed ? 140 : 0) +
                     (_micDenied ? 72 : 0) +
                     (_saveError != null ? 72 : 0) +
                     (_connectionError != null ? 72 : 0) +
@@ -432,36 +437,43 @@ class _NoteEditorScreenState extends State<NoteEditorScreen>
                           ),
                         ),
                       ),
-                      if (session?.failed == true)
-                        Padding(
-                          padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-                          child: Column(
-                            children: [
-                              Text(session!.error ?? 'Transcription failed.'),
-                              Wrap(
-                                spacing: 8,
-                                children: [
-                                  TextButton(
-                                    onPressed: () =>
-                                        _action(() => speech.retry()),
-                                    child: const Text('Retry'),
-                                  ),
-                                  if (session.engine != 'local')
+                      Consumer<SpeechService>(
+                        builder: (context, speech, _) {
+                          final session = speech.session;
+                          if (session?.failed != true) {
+                            return const SizedBox.shrink();
+                          }
+                          return Padding(
+                            padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+                            child: Column(
+                              children: [
+                                Text(session!.error ?? 'Transcription failed.'),
+                                Wrap(
+                                  spacing: 8,
+                                  children: [
                                     TextButton(
-                                      onPressed: () => _action(
-                                        () => speech.retry(local: true),
-                                      ),
-                                      child: const Text('Use local'),
+                                      onPressed: () =>
+                                          _action(() => speech.retry()),
+                                      child: const Text('Retry'),
                                     ),
-                                  TextButton(
-                                    onPressed: () => _action(speech.discard),
-                                    child: const Text('Discard'),
-                                  ),
-                                ],
-                              ),
-                            ],
-                          ),
-                        ),
+                                    if (session.engine != 'local')
+                                      TextButton(
+                                        onPressed: () => _action(
+                                          () => speech.retry(local: true),
+                                        ),
+                                        child: const Text('Use local'),
+                                      ),
+                                    TextButton(
+                                      onPressed: () => _action(speech.discard),
+                                      child: const Text('Discard'),
+                                    ),
+                                  ],
+                                ),
+                              ],
+                            ),
+                          );
+                        },
+                      ),
                       if (_deliveryError != null)
                         TextButton(
                           onPressed: _applyTranscript,
@@ -469,50 +481,50 @@ class _NoteEditorScreenState extends State<NoteEditorScreen>
                         ),
                       Padding(
                         padding: const EdgeInsets.all(16),
-                        child: Wrap(
-                          spacing: 8,
-                          runSpacing: 8,
-                          alignment: WrapAlignment.center,
-                          children: [
-                            FilledButton.icon(
-                              onPressed:
-                                  busy ||
-                                      session?.failed == true ||
-                                      session?.completed == true
-                                  ? null
-                                  : _toggleDictation,
-                              style: speech.listening
-                                  ? FilledButton.styleFrom(
-                                      backgroundColor: VfTokens.lime,
-                                      foregroundColor: VfTokens.onBlock,
-                                    )
-                                  : null,
-                              icon: Icon(
-                                speech.listening
-                                    ? PhosphorIconsRegular.stop
-                                    : PhosphorIconsRegular.microphone,
-                                size: 20,
-                              ),
-                              label: Text(
-                                _applying || _closing
-                                    ? 'Saving...'
-                                    : _connecting
-                                    ? 'Loading...'
-                                    : speech.transcribing
-                                    ? 'Transcribing...'
-                                    : _starting
-                                    ? 'Starting...'
-                                    : speech.listening
-                                    ? 'Stop recording'
-                                    : 'Dictate',
-                              ),
-                            ),
-                            if (speech.transcribing || speech.listening)
-                              TextButton(
-                                onPressed: () => _action(speech.discard),
-                                child: const Text('Discard'),
-                              ),
-                          ],
+                        child: Consumer<SpeechService>(
+                          builder: (context, speech, _) {
+                            final session = speech.session;
+                            final busy =
+                                speech.transcribing ||
+                                _applying ||
+                                _starting ||
+                                _connecting ||
+                                _closing ||
+                                _connectionError != null;
+                            return Wrap(
+                              spacing: 8,
+                              runSpacing: 8,
+                              alignment: WrapAlignment.center,
+                              children: [
+                                FilledButton.icon(
+                                  onPressed:
+                                      busy ||
+                                          session?.failed == true ||
+                                          session?.completed == true
+                                      ? null
+                                      : _toggleDictation,
+                                  style: speech.listening
+                                      ? FilledButton.styleFrom(
+                                          backgroundColor: VfTokens.lime,
+                                          foregroundColor: VfTokens.onBlock,
+                                        )
+                                      : null,
+                                  icon: Icon(
+                                    speech.listening
+                                        ? PhosphorIconsRegular.stop
+                                        : PhosphorIconsRegular.microphone,
+                                    size: 20,
+                                  ),
+                                  label: Text(_dictateLabel(speech)),
+                                ),
+                                if (speech.transcribing || speech.listening)
+                                  TextButton(
+                                    onPressed: () => _action(speech.discard),
+                                    child: const Text('Discard'),
+                                  ),
+                              ],
+                            );
+                          },
                         ),
                       ),
                     ],

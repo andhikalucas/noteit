@@ -21,7 +21,7 @@ class _SettingsScreenState extends State<SettingsScreen>
   bool _downloaded = false;
   bool _downloading = false;
   bool? _geminiConfigured;
-  double _progress = 0;
+  final _progress = ValueNotifier<double>(0);
   num? _modelMb;
   String? _statusError;
 
@@ -35,6 +35,7 @@ class _SettingsScreenState extends State<SettingsScreen>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _progress.dispose();
     super.dispose();
   }
 
@@ -51,7 +52,7 @@ class _SettingsScreenState extends State<SettingsScreen>
       final configured = await bridge.geminiConfigured();
       final running = await bridge.isBubbleRunning();
       if (!mounted) return;
-      if (settings.bubbleEnabled != running) settings.bubbleEnabled = running;
+      settings.bubbleEnabled = running;
       setState(() {
         _downloaded = model['downloaded'] == true;
         _modelMb = model['approxMb'] as num?;
@@ -67,14 +68,17 @@ class _SettingsScreenState extends State<SettingsScreen>
 
   Future<void> _download() async {
     final bridge = context.read<OverlayBridge>();
-    setState(() {
-      _downloading = true;
-      _progress = 0;
-    });
+    _progress.value = 0;
+    setState(() => _downloading = true);
     try {
       await bridge.downloadLocalModel(
         onProgress: (progress) {
-          if (mounted) setState(() => _progress = progress.clamp(0, 1));
+          if (!mounted) return;
+          final next = progress.clamp(0.0, 1.0).toDouble();
+          // Only repaint the progress UI when the whole percent changes.
+          if ((next * 100).round() != (_progress.value * 100).round()) {
+            _progress.value = next;
+          }
         },
       );
       await _refreshStatus();
@@ -148,18 +152,29 @@ class _SettingsScreenState extends State<SettingsScreen>
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(
-                      _downloading
-                          ? 'Downloading: ${(_progress * 100).round()}%'
-                          : _downloaded
-                          ? 'Ready for offline dictation'
-                          : 'Download the local model${_modelMb == null ? '' : ' (${_modelMb!.round()} MB)'}.',
-                      style: text.bodyMedium,
-                    ),
+                    if (_downloading)
+                      ValueListenableBuilder<double>(
+                        valueListenable: _progress,
+                        builder: (context, progress, _) => Text(
+                          'Downloading: ${(progress * 100).round()}%',
+                          style: text.bodyMedium,
+                        ),
+                      )
+                    else
+                      Text(
+                        _downloaded
+                            ? 'Ready for offline dictation'
+                            : 'Download the local model${_modelMb == null ? '' : ' (${_modelMb!.round()} MB)'}.',
+                        style: text.bodyMedium,
+                      ),
                     if (_downloading) ...[
                       const SizedBox(height: 12),
-                      LinearProgressIndicator(
-                        value: _progress == 0 ? null : _progress,
+                      ValueListenableBuilder<double>(
+                        valueListenable: _progress,
+                        builder: (context, progress, _) =>
+                            LinearProgressIndicator(
+                              value: progress == 0 ? null : progress,
+                            ),
                       ),
                     ] else if (!_downloaded) ...[
                       const SizedBox(height: 12),

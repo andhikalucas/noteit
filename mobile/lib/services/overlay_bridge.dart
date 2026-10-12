@@ -31,7 +31,7 @@ class OverlayBridge {
   Future<void> openOverlaySettings() => _ch.invokeMethod('openOverlaySettings');
   Future<void> openAccessibilitySettings() =>
       _ch.invokeMethod('openAccessibilitySettings');
-  Future<void> setBubbleEnabled(bool enabled, {String? locale}) =>
+  Future<void> setBubbleEnabled(bool enabled) =>
       _ch.invokeMethod('setBubbleEnabled', {'enabled': enabled});
 
   Future<void> syncSettings(SettingsService settings) async {

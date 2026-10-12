@@ -50,7 +50,7 @@ class _BubbleSetupScreenState extends State<BubbleSetupScreen>
       final mic = await Permission.microphone.isGranted;
       final running = await bridge.isBubbleRunning();
       if (!mounted) return;
-      if (settings.bubbleEnabled != running) settings.bubbleEnabled = running;
+      settings.bubbleEnabled = running;
       setState(() {
         _overlayOk = overlay;
         _accessibilityOk = a11y;

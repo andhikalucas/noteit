@@ -81,6 +81,8 @@ void main() {
     await tester.pumpAndSettle();
 
     await tester.enterText(find.byType(TextField), 'rapat');
+    // Search is debounced by 250 ms.
+    await tester.pump(const Duration(milliseconds: 300));
     await tester.pumpAndSettle();
     expect(find.text('Agenda rapat'), findsOneWidget);
     expect(find.text('Belanja bulanan'), findsNothing);
